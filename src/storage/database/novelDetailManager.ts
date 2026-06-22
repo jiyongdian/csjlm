@@ -353,7 +353,7 @@ export class NovelDetailManager {
 	async updateRelationship(id: string, data: Partial<NovelCharacterRelationship>): Promise<NovelCharacterRelationship | null> {
 		const db = await getDb();
 		const [updated] = await db.update(novelCharacterRelationships)
-			.set({ ...data, updatedAt: new Date().toISOString() })
+			.set({ ...data })
 			.where(eq(novelCharacterRelationships.id, id))
 			.returning();
 		return updated || null;

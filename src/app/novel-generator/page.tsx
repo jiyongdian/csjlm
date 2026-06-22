@@ -1555,7 +1555,8 @@ export default function NovelGenerator() {
     // 重建该条目的文本
     let newItemLine: string;
     if (field === 'keyScenes') {
-      const name = editingStructureItem.name || items[index].name || `场景${index + 1}`;
+      const sceneItems = items as { name: string; description: string; atmosphere: string }[];
+      const name = editingStructureItem.name || sceneItems[index].name || `场景${index + 1}`;
       const description = editingStructureItem.description || '';
       const atmosphere = editingStructureItem.atmosphere || '';
       newItemLine = `${name}\n${description}${atmosphere ? `\n氛围：${atmosphere}` : ''}`;
