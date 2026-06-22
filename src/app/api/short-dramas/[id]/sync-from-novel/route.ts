@@ -52,6 +52,7 @@ export async function POST(
         await dramaWorkflowManager.createCharacter({
           dramaId, userId, name: c.name,
           role: c.role || 'supporting',
+          gender: c.gender || null,
           description: c.description,
           personality: c.personality,
           appearance: c.appearance,

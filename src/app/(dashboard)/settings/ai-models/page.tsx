@@ -511,6 +511,7 @@ function getSuggestedModelFamilies(platform: string | null | undefined, modelTyp
         { value: "kling", label: "可灵" },
         { value: "sora", label: "Sora" },
         { value: "wan_video", label: "Wan 视频" },
+        { value: "agnes", label: "Agnes" },
       ];
     }
     if (normalized === "dashscope") {
@@ -560,7 +561,7 @@ function getSuggestedVideoProtocol(platform: string | null | undefined, modelFam
       }
       return "generic";
     default:
-      if (normalizedFamily === "jimeng" || normalizedFamily === "kling" || normalizedFamily === "sora") {
+      if (normalizedFamily === "jimeng" || normalizedFamily === "kling" || normalizedFamily === "sora" || normalizedFamily === "agnes") {
         return normalizedFamily;
       }
       if (normalizedFamily === "wan_video" || normalizedFamily === "wan") {
@@ -619,6 +620,7 @@ const MODEL_FAMILY_LABELS: Record<string, string> = {
   veo: "Veo",
   pixverse: "PixVerse",
   hailuo: "海螺",
+  agnes: "Agnes",
 };
 
 const MODEL_PROTOCOL_LABELS: Record<string, string> = {
@@ -629,6 +631,7 @@ const MODEL_PROTOCOL_LABELS: Record<string, string> = {
   jimeng: "即梦协议",
   kling: "可灵协议",
   sora: "Sora 协议",
+  agnes: "Agnes 协议",
 };
 
 const VIDEO_PROTOCOL_OPTIONS = [
@@ -640,6 +643,7 @@ const VIDEO_PROTOCOL_OPTIONS = [
   { value: "wan", label: "Wan 协议" },
   { value: "seedance", label: "Seedance 协议" },
   { value: "google_flow", label: "Flow 协议" },
+  { value: "agnes", label: "Agnes 协议" },
 ] as const;
 
 const AUTO_SELECT_VALUE = "__auto__";
@@ -668,7 +672,7 @@ function getSuggestedVideoProtocolOptions(
 
   switch (normalizedPlatform) {
     case "newapi":
-      ["generic", "jimeng", "kling", "sora"].forEach(addOption);
+      ["generic", "jimeng", "kling", "sora", "agnes"].forEach(addOption);
       break;
     case "dashscope":
       addOption("wan");

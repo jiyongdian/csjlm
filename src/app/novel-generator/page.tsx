@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 import { novelApi, adminNovelApi } from '@/lib/api/client';
 import AIConfigModal from '@/components/AIConfigModal';
 import { getToken } from '@/lib/get-token';
+import { broadcastDataChange, onDataChange } from "@/lib/data-sync";
 
 // 禁用服务端渲染，避免 hydration 错误
 export const dynamic = 'force-dynamic';
@@ -70,6 +71,7 @@ interface NovelIdea {
   characters: string;
   supportingCharacters: string;
   characterRelationships: string;
+  conflictRelationships?: string;
   setting: string;
   trialRead?: string; // 试读段落
 }
@@ -248,8 +250,21 @@ const TONE_OPTIONS = [
 
 const CHAPTER_COUNT_OPTIONS = [5, 10, 20, 30, 50, 80, 100];
 
-function CharacterList({ text, collapsed, variant = 'character' }: { text: string; collapsed: boolean; variant?: 'character' | 'relationship' }) {
-  const lines = text.split('\n').filter(line => line.trim());
+function CharacterList({ 
+  text, 
+  collapsed, 
+  variant = 'character',
+  onEditCharacter,
+  onEditRelationship
+}: { 
+  text: string; 
+  collapsed: boolean; 
+  variant?: 'character' | 'relationship';
+  onEditCharacter?: (index: number, name: string) => void;
+  onEditRelationship?: (index: number, item: { name1: string; name2: string; relation: string }) => void;
+}) {
+  const safeText = text || '';
+  const lines = safeText.split('\n').filter(line => line.trim());
 
   // 生成名字首字符对应的彩色头像背景色
   const avatarColors = [
@@ -337,6 +352,20 @@ function CharacterList({ text, collapsed, variant = 'character' }: { text: strin
                     <p className="text-sm leading-relaxed text-gray-400">{simpleMatch ? simpleMatch[2].trim() : line}</p>
                   )}
                 </div>
+                {onEditRelationship && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditRelationship(i, { name1, name2: name2 || name1, relation: relation || (simpleMatch ? simpleMatch[2].trim() : line) });
+                    }}
+                    className="absolute top-3 right-3 p-1.5 text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/20 rounded-lg transition-all duration-200 opacity-0 group-hover:opacity-100"
+                    title="编辑此项"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                )}
               </div>
             );
           })}
@@ -378,6 +407,20 @@ function CharacterList({ text, collapsed, variant = 'character' }: { text: strin
               >
                 {/* 顶部装饰色条 */}
                 <div className={`absolute top-0 left-0 right-0 h-1 rounded-t-xl ${avatarColors[colorIdx]}`} />
+                {variant === 'character' && onEditCharacter && name && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditCharacter(i, name);
+                    }}
+                    className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer z-10"
+                    title="编辑角色"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                )}
                 <div className="flex items-start gap-4 pt-1">
                   {/* 头像 */}
                   <div className={`flex-shrink-0 w-10 h-10 ${avatarColors[colorIdx]} rounded-full flex items-center justify-center text-white font-bold text-sm shadow-sm`}>
@@ -498,6 +541,35 @@ export default function NovelGenerator() {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingIdeaField, setEditingIdeaField] = useState<keyof NovelIdea | null>(null);
   const [editingIdeaFieldContent, setEditingIdeaFieldContent] = useState<string>('');
+  
+  // 角色单独编辑状态
+  interface DbCharacter {
+    id: string;
+    name: string;
+    role: string | null;
+    description: string | null;
+    personality: string | null;
+    appearance: string | null;
+  }
+  const [dbCharacters, setDbCharacters] = useState<DbCharacter[]>([]);
+  const [editingCharacterInfo, setEditingCharacterInfo] = useState<{
+    index: number;
+    role: 'protagonist' | 'supporting';
+    id: string | null;
+    oldName: string;
+    name: string;
+    gender: string;
+    personality: string;
+    description: string;
+    appearance: string;
+    appearanceHairColor: string;
+    appearanceHairstyle: string;
+    appearanceEyes: string;
+    appearanceUpper: string;
+    appearanceLower: string;
+  } | null>(null);
+  const [savingCharacterInfo, setSavingCharacterInfo] = useState(false);
+
   const [generatingStructureBatches, setGeneratingStructureBatches] = useState(false);
   const [structureGenerationProgress, setStructureGenerationProgress] = useState({ current: 0, total: 0 });
   const [accumulatedStructure, setAccumulatedStructure] = useState<Partial<NovelStructure> | null>(null);
@@ -761,6 +833,27 @@ export default function NovelGenerator() {
   const [editingStructureField, setEditingStructureField] = useState<keyof NovelStructure | null>(null);
   const [editingStructureFieldContent, setEditingStructureFieldContent] = useState<string>('');
 
+  // 结构条目单独编辑状态
+  interface StructureItemEdit {
+    field: keyof NovelStructure;
+    index: number;
+    title: string;
+    content: string;
+    name?: string;
+    description?: string;
+    atmosphere?: string;
+  }
+  const [editingStructureItem, setEditingStructureItem] = useState<StructureItemEdit | null>(null);
+
+  // 角色关系单独编辑状态
+  interface RelationshipItemEdit {
+    index: number;
+    name1: string;
+    name2: string;
+    relation: string;
+  }
+  const [editingRelationshipItem, setEditingRelationshipItem] = useState<RelationshipItemEdit | null>(null);
+
   // 章节内容编辑状态
   const [editingChapterContentIndex, setEditingChapterContentIndex] = useState<number | null>(null);
   const [editingChapterContent, setEditingChapterContent] = useState<string>('');
@@ -840,6 +933,29 @@ export default function NovelGenerator() {
       }, 0);
     }
   }, [mounted, config.protagonistName, config.themeIdea]);
+
+  // 当 savedNovelId 变化时，从数据库获取角色子表数据，用于编辑角色时匹配 ID
+  useEffect(() => {
+    if (!savedNovelId) {
+      setDbCharacters([]);
+      return;
+    }
+    const fetchDetails = async () => {
+      try {
+        const token = getToken();
+        const res = await fetch(`/api/novels/${savedNovelId}/details`, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        });
+        const result = await res.json();
+        if (result.success && result.data?.characters) {
+          setDbCharacters(result.data.characters);
+        }
+      } catch (e) {
+        console.error('加载角色详情失败:', e);
+      }
+    };
+    fetchDetails();
+  }, [savedNovelId]);
   
   // 平滑进度百分比动画
   useEffect(() => {
@@ -1303,14 +1419,44 @@ export default function NovelGenerator() {
       const contentStart = splits[i].end;
       const contentEnd = i + 1 < splits.length ? splits[i + 1].index : text.length;
       const raw = text.slice(contentStart, contentEnd).trim();
-      // 尝试拆分标题和内容：优先按冒号，其次按逗号，再次按句号
+      
       let title = '';
       let content = raw;
+      
+      // 优先尝试按冒号拆分（标题：内容）
       const colonIdx = raw.search(/[：:]/);
       if (colonIdx > 0 && colonIdx < 30) {
         title = raw.slice(0, colonIdx).trim();
         content = raw.slice(colonIdx + 1).trim();
-      } else {
+      } 
+      // 如果没有冒号，检查是否有换行分隔标题和内容
+      else if (raw.includes('\n')) {
+        const firstNewline = raw.indexOf('\n');
+        const firstLine = raw.slice(0, firstNewline).trim();
+        const rest = raw.slice(firstNewline + 1).trim();
+        // 如果第一行较短（<=30字符）且有后续内容，视为标题
+        if (firstLine.length > 0 && firstLine.length <= 30 && rest.length > 0) {
+          title = firstLine;
+          content = rest;
+        } else {
+          // 否则按原有逻辑尝试逗号或句号
+          const commaIdx = firstLine.search(/[，,]/);
+          if (commaIdx > 0 && commaIdx < 25) {
+            title = firstLine.slice(0, commaIdx).trim();
+            content = firstLine.slice(commaIdx + 1).trim() + (rest ? '\n' + rest : '');
+          } else {
+            const periodIdx = firstLine.search(/[。！？]/);
+            if (periodIdx > 0 && periodIdx < 40) {
+              title = firstLine.slice(0, periodIdx + 1).trim();
+              content = firstLine.slice(periodIdx + 1).trim() + (rest ? '\n' + rest : '');
+            } else {
+              content = raw;
+            }
+          }
+        }
+      } 
+      // 没有换行，尝试逗号或句号
+      else {
         const commaIdx = raw.search(/[，,]/);
         if (commaIdx > 0 && commaIdx < 25) {
           title = raw.slice(0, commaIdx).trim();
@@ -1343,7 +1489,7 @@ export default function NovelGenerator() {
   };
 
   // 保存结构分析的单个字段
-  const handleSaveStructureField = () => {
+  const handleSaveStructureField = async () => {
     if (!novelStructure || !editingStructureField) return;
 
     // 验证必填字段
@@ -1352,13 +1498,22 @@ export default function NovelGenerator() {
       return;
     }
 
-    setNovelStructure({
+    const updatedStructure = {
       ...novelStructure,
       [editingStructureField]: editingStructureFieldContent
-    });
+    };
+    
+    setNovelStructure(updatedStructure);
     setEditingStructureField(null);
     setEditingStructureFieldContent('');
     showToast('已保存', 'success');
+
+    // 同步保存到数据库
+    try {
+      await saveNovelToDatabase(undefined, undefined, updatedStructure);
+    } catch (error) {
+      console.error('保存结构字段失败:', error);
+    }
   };
 
   // 取消编辑结构分析的单个字段
@@ -1367,22 +1522,160 @@ export default function NovelGenerator() {
     setEditingStructureFieldContent('');
   };
 
+  // 开始编辑结构分析的单个条目
+  const handleStartEditStructureItem = (field: keyof NovelStructure, index: number, item: { title?: string; content?: string; name?: string; description?: string; atmosphere?: string }) => {
+    if (!novelStructure) return;
+    const fieldText = novelStructure[field] as string || '';
+    setEditingStructureItem({
+      field,
+      index,
+      title: item.title || '',
+      content: item.content || '',
+      name: item.name || '',
+      description: item.description || '',
+      atmosphere: item.atmosphere || ''
+    });
+  };
+
+  // 保存结构分析的单个条目
+  const handleSaveStructureItem = async () => {
+    if (!novelStructure || !editingStructureItem) return;
+
+    const field = editingStructureItem.field;
+    const index = editingStructureItem.index;
+    const fieldText = novelStructure[field] as string || '';
+
+    // 解析当前字段的所有条目
+    const items = field === 'keyScenes' 
+      ? parseKeyScenes(fieldText)
+      : parseNumberedItems(fieldText);
+
+    if (index >= items.length) return;
+
+    // 重建该条目的文本
+    let newItemLine: string;
+    if (field === 'keyScenes') {
+      const name = editingStructureItem.name || items[index].name || `场景${index + 1}`;
+      const description = editingStructureItem.description || '';
+      const atmosphere = editingStructureItem.atmosphere || '';
+      newItemLine = `${name}\n${description}${atmosphere ? `\n氛围：${atmosphere}` : ''}`;
+    } else {
+      const title = editingStructureItem.title || '';
+      const content = editingStructureItem.content || '';
+      // 如果有标题，用换行分隔；否则直接用内容
+      newItemLine = title ? `${title}\n${content}` : content;
+    }
+
+    // 按条目分割原文本
+    const rawItems = fieldText.split(/(?=\d+\.\s)/);
+
+    // 过滤空条目并重建
+    const filteredItems = rawItems.map(s => s.trim()).filter(Boolean);
+    
+    // 找到对应的条目并替换
+    let itemIndex = 0;
+    const newItems = filteredItems.map(line => {
+      if (line.match(/^\d+\./)) {
+        if (itemIndex === index) {
+          itemIndex++;
+          return `${index + 1}. ${newItemLine}`;
+        }
+        itemIndex++;
+      }
+      return line;
+    });
+
+    const newText = newItems.join('\n\n');
+    const updatedStructure = { ...novelStructure, [field]: newText };
+    setNovelStructure(updatedStructure);
+    setEditingStructureItem(null);
+
+    showToast('已保存', 'success');
+
+    // 同步保存到数据库
+    try {
+      await saveNovelToDatabase(undefined, undefined, updatedStructure);
+    } catch (error) {
+      console.error('保存结构条目失败:', error);
+    }
+  };
+
+  // 取消编辑结构分析的单个条目
+  const handleCancelEditStructureItem = () => {
+    setEditingStructureItem(null);
+  };
+
+  // 开始编辑角色关系条目
+  const handleStartEditRelationshipItem = (index: number, item: { name1: string; name2: string; relation: string }) => {
+    setEditingRelationshipItem({ index, name1: item.name1, name2: item.name2, relation: item.relation });
+  };
+
+  // 保存角色关系条目
+  const handleSaveRelationshipItem = async () => {
+    if (!novelIdea || !editingRelationshipItem) return;
+
+    const text = novelIdea.characterRelationships || '';
+    const blocks = text.split(/\n(?=[^\n]+[→>\-]{1,2}[^\n]+)/);
+    const filteredBlocks = blocks.map(b => b.trim()).filter(Boolean);
+    
+    if (editingRelationshipItem.index >= filteredBlocks.length) return;
+
+    // 重建该条目的文本
+    const { name1, name2, relation } = editingRelationshipItem;
+    const newName2 = name2 !== name1 ? name2 : '';
+    let newBlock: string;
+    if (newName2) {
+      newBlock = `${name1} → ${newName2}\n${relation}`;
+    } else {
+      newBlock = `${name1} → ${relation}`;
+    }
+
+    filteredBlocks[editingRelationshipItem.index] = newBlock;
+    const newText = filteredBlocks.join('\n\n');
+    
+    const updatedIdea = { ...novelIdea, characterRelationships: newText };
+    setNovelIdea(updatedIdea);
+    setEditingRelationshipItem(null);
+
+    showToast('已保存', 'success');
+
+    // 同步保存到数据库
+    try {
+      await saveNovelToDatabase();
+    } catch (error) {
+      console.error('保存角色关系失败:', error);
+    }
+  };
+
+  // 取消编辑角色关系条目
+  const handleCancelEditRelationshipItem = () => {
+    setEditingRelationshipItem(null);
+  };
+
   // 开始编辑单个章节钩子
   const handleStartEditChapter = (index: number) => {
     setEditingChapterIndex(index);
   };
 
   // 保存单个章节钩子
-  const handleSaveChapter = (index: number, newHook: string) => {
+  const handleSaveChapter = async (index: number, newHook: string) => {
     if (!novelStructure) return;
 
     const newHooks = [...novelStructure.chapterHooks];
     newHooks[index] = newHook;
 
-    setNovelStructure({ ...novelStructure, chapterHooks: newHooks });
+    const updatedStructure = { ...novelStructure, chapterHooks: newHooks };
+    setNovelStructure(updatedStructure);
     setEditingChapterIndex(null);
 
-    alert(`第${index + 1}章钩子已保存`);
+    showToast('已保存', 'success');
+
+    // 同步保存到数据库
+    try {
+      await saveNovelToDatabase(undefined, undefined, updatedStructure);
+    } catch (error) {
+      console.error('保存章节钩子失败:', error);
+    }
   };
 
   // 取消编辑单个章节钩子
@@ -2170,6 +2463,198 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
     }
   };
 
+  // 开始编辑单个角色
+  const handleStartEditSingleCharacter = (index: number, role: 'protagonist' | 'supporting') => {
+    const text = role === 'protagonist' ? novelIdea?.characters : novelIdea?.supportingCharacters;
+    if (!text) return;
+    const lines = text.split('\n').filter(line => line.trim());
+    const line = lines[index];
+    if (!line) return;
+
+    // 解析名字、标签、描述、外貌
+    const nameMatch = line.match(/^(.+?)(?:——|—|：|:|\s[—\-])/);
+    const name = nameMatch ? nameMatch[1].trim() : '';
+    const rest = nameMatch ? line.slice(nameMatch[0].length).trim() : line;
+
+    // 性格
+    let personality = '';
+    let gender = '';
+    const tagMatch = rest.match(/^【(.+?)】/);
+    if (tagMatch) {
+      const rawPersonality = tagMatch[1].split(/[\/\/]/).map(t => t.trim()).filter(Boolean).join(', ');
+      // 如果性格只有"男"或"女"，说明性别被错误存到了这里
+      if (rawPersonality === '男' || rawPersonality === '女') {
+        gender = rawPersonality;
+        personality = '';
+      } else {
+        personality = rawPersonality;
+      }
+    }
+
+    // 外貌
+    const appearanceMatch = rest.match(/【外貌】([^【]*)/);
+    const appearance = appearanceMatch ? appearanceMatch[1].trim() : '';
+
+    // 解析外貌各子字段
+    const parseAppearanceField = (label: string): string => {
+      const regex = new RegExp(`${label}[：:]\\s*([^｜|]*)`);
+      const match = appearance.match(regex);
+      return match ? match[1].trim() : '';
+    };
+
+    const appearanceHairColor = parseAppearanceField('发色');
+    const appearanceHairstyle = parseAppearanceField('发型');
+    const appearanceEyes = parseAppearanceField('眼睛');
+    const appearanceUpper = parseAppearanceField('上身');
+    const appearanceLower = parseAppearanceField('下身');
+
+    // 描述 (去除性格和外貌部分)
+    const description = rest.replace(/^【.+?】\s*/, '').replace(/【外貌】[^【]*/g, '').trim();
+
+    // 匹配数据库中的 ID
+    const dbChar = dbCharacters.find(c => {
+      const cleanDbName = c.name ? c.name.replace(/\s*[—–\-]+\s*【.*$/, '').replace(/\s*【.*$/, '').trim() : '';
+      return cleanDbName === name;
+    });
+
+    setEditingCharacterInfo({
+      index,
+      role,
+      id: dbChar?.id || null,
+      oldName: name,
+      name,
+      gender,
+      personality,
+      description,
+      appearance,
+      appearanceHairColor,
+      appearanceHairstyle,
+      appearanceEyes,
+      appearanceUpper,
+      appearanceLower,
+    });
+  };
+
+  // 保存编辑后的单个角色
+  const handleSaveSingleCharacter = async () => {
+    if (!editingCharacterInfo || !novelIdea) return;
+    setSavingCharacterInfo(true);
+    try {
+      const { index, role, id, name, gender, personality, description, appearanceHairColor, appearanceHairstyle, appearanceEyes, appearanceUpper, appearanceLower } = editingCharacterInfo;
+
+      // 组装外观字符串
+      const appearanceParts: string[] = [];
+      if (appearanceHairColor) appearanceParts.push(`发色：${appearanceHairColor}`);
+      if (appearanceHairstyle) appearanceParts.push(`发型：${appearanceHairstyle}`);
+      if (appearanceEyes) appearanceParts.push(`眼睛：${appearanceEyes}`);
+      if (appearanceUpper) appearanceParts.push(`上身：${appearanceUpper}`);
+      if (appearanceLower) appearanceParts.push(`下身：${appearanceLower}`);
+      const appearance = appearanceParts.join('｜');
+
+      // 1. 组装行文本格式
+      const tagStr = personality ? `【${personality.split(/[,，]\s*/).map(t => t.trim()).filter(Boolean).join('/')}】` : '';
+      const appearanceStr = appearance ? ` 【外貌】${appearance}` : '';
+      const newLine = `${name}——${tagStr}${description}${appearanceStr}`;
+
+      // 2. 更新父级小说创意状态里的 characters 或 supportingCharacters
+      const field = role === 'protagonist' ? 'characters' : 'supportingCharacters';
+      const text = novelIdea[field] || '';
+      const lines = text.split('\n').filter(line => line.trim());
+      lines[index] = newLine;
+      const updatedText = lines.join('\n');
+
+      const updatedIdea = {
+        ...novelIdea,
+        [field]: updatedText
+      };
+
+      if (savedNovelId) {
+        const token = getToken();
+        const userStr = typeof window !== 'undefined' ? localStorage.getItem('user') : null;
+        let isAdmin = false;
+        if (userStr) {
+          try { isAdmin = JSON.parse(userStr).role === 'admin'; } catch (e) {}
+        }
+
+        // 先更新详情表中的角色记录以防与 parent 保存的后台同步产生竞态
+        if (id) {
+          const detailUrl = isAdmin ? `/api/admin/novels/${savedNovelId}/details` : `/api/novels/${savedNovelId}/details`;
+          await fetch(detailUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({
+              type: 'character',
+              entityId: id,
+              data: {
+                name,
+                role: role === 'protagonist' ? 'protagonist' : 'supporting',
+                gender: gender || null,
+                description: description || null,
+                personality: personality || null,
+                appearance: appearance || null
+              }
+            })
+          });
+        }
+
+        // 更新父级小说
+        const novelData = {
+          title: novelTitle || novelIdea?.theme || '未命名小说',
+          description: novelIdea?.concept || '',
+          category: config.genre,
+          genderTarget: config.genderTarget,
+          narrativePerspective: config.narrativePerspective,
+          tone: config.tone,
+          protagonist: config.protagonistName || '',
+          supportingCharacterName: config.supportingCharacterName || '',
+          totalChapters: config.chapterCount,
+          currentChapters: chapters.length,
+          status: chapters.length === config.chapterCount ? 'completed' : 'generating',
+          idea: updatedIdea,
+          structure: novelStructure,
+          chapters,
+        };
+
+        const updateUrl = isAdmin ? `/api/admin/novels/${savedNovelId}` : `/api/novels/${savedNovelId}`;
+        await fetch(updateUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify(novelData),
+        });
+      }
+
+      // 4. 更新前端状态
+      setNovelIdea(updatedIdea);
+
+      // 5. 重新获取数据库角色详情
+      if (savedNovelId) {
+        const token = getToken();
+        const res = await fetch(`/api/novels/${savedNovelId}/details`, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        });
+        const result = await res.json();
+        if (result.success && result.data?.characters) {
+          setDbCharacters(result.data.characters);
+        }
+      }
+
+      showToast('角色保存成功', 'success');
+      setEditingCharacterInfo(null);
+    } catch (e: unknown) {
+      console.error('保存角色失败:', e);
+      const err = e as Error;
+      showToast(err.message || '保存角色失败', 'error');
+    } finally {
+      setSavingCharacterInfo(false);
+    }
+  };
+
   // 保存小说到数据库
   const handleSaveNovel = async () => {
     try {
@@ -2267,6 +2752,8 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
 
     if (result.success) {
       setSavedNovelId(result.data.id);
+      // 广播数据变更，通知后台管理页面刷新
+      broadcastDataChange({ type: 'novel', action: savedNovelId ? 'update' : 'create', id: result.data.id });
     } else {
       // 处理存储上限错误，给出明确提示
       if (result.code === 'STORAGE_LIMIT') {
@@ -3514,7 +4001,11 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                             </button>
                           </div>
                         </div>
-                        <CharacterList text={novelIdea.characters} collapsed={collapsedSections.has('characters')} />
+                        <CharacterList 
+                          text={novelIdea.characters} 
+                          collapsed={collapsedSections.has('characters')} 
+                          onEditCharacter={(idx) => handleStartEditSingleCharacter(idx, 'protagonist')}
+                        />
                       </>
                     )}
                   </div>
@@ -3579,7 +4070,11 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                             </button>
                           </div>
                         </div>
-                        <CharacterList text={novelIdea.supportingCharacters} collapsed={collapsedSections.has('supportingCharacters')} />
+                        <CharacterList 
+                          text={novelIdea.supportingCharacters} 
+                          collapsed={collapsedSections.has('supportingCharacters')} 
+                          onEditCharacter={(idx) => handleStartEditSingleCharacter(idx, 'supporting')}
+                        />
                       </>
                     )}
                   </div>
@@ -3644,7 +4139,12 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                             </button>
                           </div>
                         </div>
-                        <CharacterList text={novelIdea.characterRelationships} variant="relationship" collapsed={collapsedSections.has('characterRelationships')} />
+                        <CharacterList 
+                          text={novelIdea.characterRelationships} 
+                          variant="relationship" 
+                          collapsed={collapsedSections.has('characterRelationships')}
+                          onEditRelationship={handleStartEditRelationshipItem}
+                        />
                       </>
                     )}
                   </div>
@@ -4115,6 +4615,15 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                                 {item.title && <p className="font-bold text-amber-300 text-sm mb-1">{item.title}</p>}
                                 <p className="text-gray-300 text-sm leading-6">{item.content}</p>
                               </div>
+                              <button
+                                onClick={() => handleStartEditStructureItem('keyConflicts', idx, item)}
+                                className="flex-shrink-0 p-1.5 text-amber-400 hover:text-amber-300 hover:bg-amber-500/20 rounded-lg transition-all duration-200"
+                                title="编辑此项"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
                             </div>
                           ))}
                         </div>
@@ -4194,6 +4703,15 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                                   </div>
                                   {item.description && <p className="text-gray-300 text-sm leading-6">{item.description}</p>}
                                 </div>
+                                <button
+                                  onClick={() => handleStartEditStructureItem('keyScenes', idx, item)}
+                                  className="flex-shrink-0 p-1.5 text-sky-400 hover:text-sky-300 hover:bg-sky-500/20 rounded-lg transition-all duration-200"
+                                  title="编辑此项"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -4270,6 +4788,15 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                                 {item.title && <p className="font-bold text-emerald-300 text-sm mb-1">{item.title}</p>}
                                 <p className="text-gray-300 text-sm leading-6">{item.content}</p>
                               </div>
+                              <button
+                                onClick={() => handleStartEditStructureItem('keyItems', idx, item)}
+                                className="flex-shrink-0 p-1.5 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/20 rounded-lg transition-all duration-200"
+                                title="编辑此项"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
                             </div>
                           ))}
                         </div>
@@ -5466,6 +5993,327 @@ ${novelStructure?.chapterHooks?.map((hook, index) => `第${index + 1}章：${hoo
                     保存
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 角色编辑弹窗 */}
+      {editingCharacterInfo && (
+        <div 
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[9999] p-4"
+          onClick={() => setEditingCharacterInfo(null)}
+        >
+          <div 
+            className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl border border-white/10 shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <span>👤</span>
+                  编辑角色 — {editingCharacterInfo.role === 'protagonist' ? '主要人物' : '配角'}
+                </h2>
+                <button
+                  onClick={() => setEditingCharacterInfo(null)}
+                  className="text-gray-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">角色名称 *</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 bg-white/5 text-white transition-all text-sm"
+                      value={editingCharacterInfo.name}
+                      onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, name: e.target.value })}
+                      placeholder="请输入角色名字"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">性别</label>
+                    <select
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 bg-white/5 text-white transition-all text-sm"
+                      value={editingCharacterInfo.gender || ''}
+                      onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, gender: e.target.value })}
+                    >
+                      <option value="">未知</option>
+                      <option value="男">男</option>
+                      <option value="女">女</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">角色类型</label>
+                    <select
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 bg-white/5 text-white transition-all text-sm"
+                      value={editingCharacterInfo.role}
+                      onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, role: e.target.value as 'protagonist' | 'supporting' })}
+                    >
+                      <option value="protagonist">主角</option>
+                      <option value="supporting">配角</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-1.5">性格特点 (用逗号/斜杠分隔多个标签)</label>
+                  <input
+                    type="text"
+                    className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 bg-white/5 text-white transition-all text-sm"
+                    value={editingCharacterInfo.personality}
+                    onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, personality: e.target.value })}
+                    placeholder="例如: 傲娇, 善良, 冷酷"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-2">外貌特征</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-amber-300 mb-1">发色</label>
+                      <input
+                        type="text"
+                        className="w-full px-3 py-2 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 bg-white/5 text-white transition-all text-sm"
+                        value={editingCharacterInfo.appearanceHairColor}
+                        onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, appearanceHairColor: e.target.value })}
+                        placeholder="例如: 黑色"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-yellow-300 mb-1">发型</label>
+                      <input
+                        type="text"
+                        className="w-full px-3 py-2 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-yellow-500/30 focus:border-yellow-500 bg-white/5 text-white transition-all text-sm"
+                        value={editingCharacterInfo.appearanceHairstyle}
+                        onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, appearanceHairstyle: e.target.value })}
+                        placeholder="例如: 短发"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-sky-300 mb-1">眼睛</label>
+                      <input
+                        type="text"
+                        className="w-full px-3 py-2 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 bg-white/5 text-white transition-all text-sm"
+                        value={editingCharacterInfo.appearanceEyes}
+                        onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, appearanceEyes: e.target.value })}
+                        placeholder="例如: 蓝色"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-violet-300 mb-1">上身</label>
+                      <input
+                        type="text"
+                        className="w-full px-3 py-2 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500 bg-white/5 text-white transition-all text-sm"
+                        value={editingCharacterInfo.appearanceUpper}
+                        onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, appearanceUpper: e.target.value })}
+                        placeholder="例如: 白色衬衫"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs text-emerald-300 mb-1">下身</label>
+                      <input
+                        type="text"
+                        className="w-full px-3 py-2 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 bg-white/5 text-white transition-all text-sm"
+                        value={editingCharacterInfo.appearanceLower}
+                        onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, appearanceLower: e.target.value })}
+                        placeholder="例如: 黑色长裤"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-1.5">角色描述</label>
+                  <textarea
+                    rows={4}
+                    className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 bg-white/5 text-white transition-all text-sm resize-none"
+                    value={editingCharacterInfo.description}
+                    onChange={(e) => setEditingCharacterInfo({ ...editingCharacterInfo, description: e.target.value })}
+                    placeholder="请输入角色设定、身份和故事背景描述..."
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-white/10">
+                  <button
+                    onClick={() => setEditingCharacterInfo(null)}
+                    className="flex-1 py-2.5 bg-white/8 hover:bg-white/15 text-gray-300 font-semibold rounded-xl transition-all duration-200 text-sm cursor-pointer"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleSaveSingleCharacter}
+                    disabled={savingCharacterInfo || !editingCharacterInfo.name.trim()}
+                    className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-semibold rounded-xl transition-all duration-200 text-sm disabled:opacity-50 cursor-pointer shadow-lg shadow-purple-500/20"
+                  >
+                    {savingCharacterInfo ? '保存中...' : '保存'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 结构条目编辑弹窗 */}
+      {editingStructureItem && novelStructure && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)' }}>
+          <div className="w-full max-w-lg rounded-2xl border shadow-2xl" style={{ background: 'rgba(20,20,35,0.98)', borderColor: 'rgba(139,92,246,0.2)' }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+              <h3 className="text-lg font-bold text-white">
+                {editingStructureItem.field === 'keyConflicts' && '⚔️ 编辑关键冲突'}
+                {editingStructureItem.field === 'keyScenes' && '🏰 编辑关键场景'}
+                {editingStructureItem.field === 'keyItems' && '🗝️ 编辑关键物品'}
+              </h3>
+              <button onClick={handleCancelEditStructureItem} className="p-2 text-gray-400 hover:text-white transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              {editingStructureItem.field === 'keyScenes' ? (
+                <>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">场景名称 *</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 bg-white/5 text-white transition-all text-sm"
+                      value={editingStructureItem.name || ''}
+                      onChange={(e) => setEditingStructureItem({ ...editingStructureItem, name: e.target.value })}
+                      placeholder="请输入场景名称"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">场景描述</label>
+                    <textarea
+                      rows={4}
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 bg-white/5 text-white transition-all text-sm resize-none"
+                      value={editingStructureItem.description || ''}
+                      onChange={(e) => setEditingStructureItem({ ...editingStructureItem, description: e.target.value })}
+                      placeholder="请输入场景详细描述"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">氛围</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 bg-white/5 text-white transition-all text-sm"
+                      value={editingStructureItem.atmosphere || ''}
+                      onChange={(e) => setEditingStructureItem({ ...editingStructureItem, atmosphere: e.target.value })}
+                      placeholder="例如：紧张、神秘、压抑"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">标题</label>
+                    <input
+                      type="text"
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 bg-white/5 text-white transition-all text-sm"
+                      value={editingStructureItem.title || ''}
+                      onChange={(e) => setEditingStructureItem({ ...editingStructureItem, title: e.target.value })}
+                      placeholder="请输入标题（可为空）"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">内容 *</label>
+                    <textarea
+                      rows={4}
+                      className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 bg-white/5 text-white transition-all text-sm resize-none"
+                      value={editingStructureItem.content || ''}
+                      onChange={(e) => setEditingStructureItem({ ...editingStructureItem, content: e.target.value })}
+                      placeholder="请输入详细内容"
+                    />
+                  </div>
+                </>
+              )}
+              <div className="flex gap-3 pt-4 border-t border-white/10">
+                <button
+                  onClick={handleCancelEditStructureItem}
+                  className="flex-1 py-2.5 bg-white/8 hover:bg-white/15 text-gray-300 font-semibold rounded-xl transition-all duration-200 text-sm cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleSaveStructureItem}
+                  disabled={!editingStructureItem.content && !editingStructureItem.description && !editingStructureItem.name}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-semibold rounded-xl transition-all duration-200 text-sm disabled:opacity-50 cursor-pointer shadow-lg shadow-purple-500/20"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 角色关系编辑弹窗 */}
+      {editingRelationshipItem && novelIdea && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)' }}>
+          <div className="w-full max-w-lg rounded-2xl border shadow-2xl" style={{ background: 'rgba(20,20,35,0.98)', borderColor: 'rgba(99,102,241,0.2)' }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+              <h3 className="text-lg font-bold text-white">🔗 编辑角色关系</h3>
+              <button onClick={handleCancelEditRelationshipItem} className="p-2 text-gray-400 hover:text-white transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-1.5">角色A *</label>
+                  <input
+                    type="text"
+                    className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 bg-white/5 text-white transition-all text-sm"
+                    value={editingRelationshipItem.name1}
+                    onChange={(e) => setEditingRelationshipItem({ ...editingRelationshipItem, name1: e.target.value })}
+                    placeholder="角色A名称"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-1.5">角色B</label>
+                  <input
+                    type="text"
+                    className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 bg-white/5 text-white transition-all text-sm"
+                    value={editingRelationshipItem.name2 !== editingRelationshipItem.name1 ? editingRelationshipItem.name2 : ''}
+                    onChange={(e) => setEditingRelationshipItem({ ...editingRelationshipItem, name2: e.target.value })}
+                    placeholder="角色B名称（可选）"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-300 mb-1.5">关系描述 *</label>
+                <textarea
+                  rows={4}
+                  className="w-full px-4 py-2.5 border border-white/15 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 bg-white/5 text-white transition-all text-sm resize-none"
+                  value={editingRelationshipItem.relation || ''}
+                  onChange={(e) => setEditingRelationshipItem({ ...editingRelationshipItem, relation: e.target.value })}
+                  placeholder="请输入关系描述"
+                />
+              </div>
+              <div className="flex gap-3 pt-4 border-t border-white/10">
+                <button
+                  onClick={handleCancelEditRelationshipItem}
+                  className="flex-1 py-2.5 bg-white/8 hover:bg-white/15 text-gray-300 font-semibold rounded-xl transition-all duration-200 text-sm cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleSaveRelationshipItem}
+                  disabled={!editingRelationshipItem.name1.trim() || !editingRelationshipItem.relation.trim()}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-xl transition-all duration-200 text-sm disabled:opacity-50 cursor-pointer shadow-lg shadow-indigo-500/20"
+                >
+                  保存
+                </button>
               </div>
             </div>
           </div>

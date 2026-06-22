@@ -6,7 +6,7 @@ import { syncNovelDetails } from '@/lib/novel-detail-sync';
 /**
  * POST /api/admin/novels/[id]/resync-characters
  * 强制重新解析 idea.characters/supportingCharacters 同步到 novel_characters 子表
- * 用于修复历史脏数据
+ * 用于修复历史脏数据（包括角色和关系）
  */
 export async function POST(
   request: NextRequest,

@@ -7,6 +7,7 @@ import {
 	novelScenes,
 	novelItems,
 	novelCharacterRelationships,
+	novelCharacterConflicts,
 	type NovelPlot,
 	type InsertNovelPlot,
 	type UpdateNovelPlot,
@@ -24,6 +25,8 @@ import {
 	type UpdateNovelItem,
 	type NovelCharacterRelationship,
 	type InsertNovelCharacterRelationship,
+	type NovelCharacterConflict,
+	type InsertNovelCharacterConflict,
 } from "./shared/schema";
 
 function genId(prefix: string) {
@@ -155,6 +158,7 @@ export class NovelDetailManager {
 			userId,
 			name: data.name,
 			role: data.role ?? 'supporting',
+			gender: data.gender ?? null,
 			description: data.description ?? null,
 			personality: data.personality ?? null,
 			appearance: data.appearance ?? null,
@@ -346,21 +350,80 @@ export class NovelDetailManager {
 		return results;
 	}
 
+	async updateRelationship(id: string, data: Partial<NovelCharacterRelationship>): Promise<NovelCharacterRelationship | null> {
+		const db = await getDb();
+		const [updated] = await db.update(novelCharacterRelationships)
+			.set({ ...data, updatedAt: new Date().toISOString() })
+			.where(eq(novelCharacterRelationships.id, id))
+			.returning();
+		return updated || null;
+	}
+
+	// ======================== 角色冲突 (CharacterConflict) ========================
+
+	async getConflictsByNovelId(novelId: string): Promise<NovelCharacterConflict[]> {
+		const db = await getDb();
+		return db.select().from(novelCharacterConflicts)
+			.where(eq(novelCharacterConflicts.novelId, novelId))
+			.orderBy(asc(novelCharacterConflicts.sortOrder));
+	}
+
+	async createConflict(novelId: string, userId: string, data: Omit<InsertNovelCharacterConflict, 'novelId' | 'userId'>): Promise<NovelCharacterConflict> {
+		const db = await getDb();
+		const id = genId('conflict');
+		const [created] = await db.insert(novelCharacterConflicts).values({
+			id, novelId, userId,
+			fromCharacter: data.fromCharacter,
+			toCharacter: data.toCharacter,
+			conflictType: data.conflictType ?? null,
+			description: data.description ?? null,
+			sortOrder: data.sortOrder ?? 0,
+		}).returning();
+		return created;
+	}
+
+	async deleteConflictsByNovelId(novelId: string): Promise<void> {
+		const db = await getDb();
+		await db.delete(novelCharacterConflicts).where(eq(novelCharacterConflicts.novelId, novelId));
+	}
+
+	async bulkCreateConflicts(novelId: string, userId: string, conflicts: Omit<InsertNovelCharacterConflict, 'novelId' | 'userId'>[]): Promise<NovelCharacterConflict[]> {
+		const results: NovelCharacterConflict[] = [];
+		for (const c of conflicts) {
+			results.push(await this.createConflict(novelId, userId, c));
+		}
+		return results;
+	}
+
 	// ======================== 聚合查询 ========================
 
 	/**
-	 * 获取小说的全部结构化详情（剧情 + 钩子 + 角色 + 场景 + 物品 + 关系）
+	 * 获取小说的全部结构化详情（剧情 + 钩子 + 角色 + 场景 + 物品 + 关系 + 冲突）
 	 */
 	async getNovelDetails(novelId: string) {
-		const [plot, hooks, characters, scenes, items, relationships] = await Promise.all([
-			this.getPlotByNovelId(novelId),
-			this.getHooksByNovelId(novelId),
-			this.getCharactersByNovelId(novelId),
-			this.getScenesByNovelId(novelId),
-			this.getItemsByNovelId(novelId),
-			this.getRelationshipsByNovelId(novelId),
-		]);
-		return { plot, hooks, characters, scenes, items, relationships };
+		try {
+			const [plot, hooks, characters, scenes, items, relationships] = await Promise.all([
+				this.getPlotByNovelId(novelId),
+				this.getHooksByNovelId(novelId),
+				this.getCharactersByNovelId(novelId),
+				this.getScenesByNovelId(novelId),
+				this.getItemsByNovelId(novelId),
+				this.getRelationshipsByNovelId(novelId),
+			]);
+			
+			// 冲突表可能不存在，单独处理
+			let conflicts: any[] = [];
+			try {
+				conflicts = await this.getConflictsByNovelId(novelId);
+			} catch (e) {
+				console.warn('[getNovelDetails] Conflicts table may not exist:', e);
+			}
+			
+			return { plot, hooks, characters, scenes, items, relationships, conflicts };
+		} catch (error) {
+			console.error('[getNovelDetails] Error for novelId:', novelId, error);
+			throw error;
+		}
 	}
 
 	/**
@@ -374,6 +437,7 @@ export class NovelDetailManager {
 			this.deleteScenesByNovelId(novelId),
 			this.deleteItemsByNovelId(novelId),
 			this.deleteRelationshipsByNovelId(novelId),
+			this.deleteConflictsByNovelId(novelId),
 		]);
 	}
 }

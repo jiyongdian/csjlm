@@ -118,7 +118,7 @@ export async function syncNovelDetails(
           if (existingChars.length > 0) await novelDetailManager.deleteCharactersByNovelId(novelId);
           for (const c of allChars) {
             await novelDetailManager.createCharacter(novelId, userId, {
-              name: c.name, role: c.role, description: c.description,
+              name: c.name, role: c.role, gender: c.gender || null, description: c.description,
               personality: c.personality, appearance: c.appearance || null,
             });
           }
@@ -128,7 +128,7 @@ export async function syncNovelDetails(
           for (const c of allChars) {
             if (existingNameSet.has(c.name)) continue;
             await novelDetailManager.createCharacter(novelId, userId, {
-              name: c.name, role: c.role, description: c.description,
+              name: c.name, role: c.role, gender: c.gender || null, description: c.description,
               personality: c.personality, appearance: c.appearance || null,
             });
           }
@@ -155,30 +155,55 @@ export async function syncNovelDetails(
  */
 function parseRelationships(text: string): { from: string; to: string; description: string }[] {
   const results: { from: string; to: string; description: string }[] = [];
-  // 按空行或「角色名 →」开头拆分块
-  const blocks = text.split(/\n(?=[^\n]+[→>\-]{1,2}[^\n]+)/);
-  for (const block of blocks) {
-    const trimmed = block.trim();
-    if (!trimmed) continue;
-    const lines = trimmed.split('\n');
-    const header = lines[0].trim();
-    // 匹配 "A → B" 或 "A->B" 或 "A - B"
-    const arrowMatch = header.match(/^(.+?)\s*[→>\-]{1,2}\s*(.+?)$/);
-    if (!arrowMatch) continue;
-    const from = arrowMatch[1].trim();
-    const to = arrowMatch[2].trim();
-    if (!from || !to || from.length > 30 || to.length > 30) continue;
-    const description = lines.slice(1).join('\n').trim();
-    results.push({ from, to, description });
+  if (!text || typeof text !== 'string') return results;
+  
+  // 按换行拆分所有行
+  const allLines = text.split('\n').map(l => l.trim()).filter(l => l);
+  
+  // 匹配箭头格式: "A → B" 或 "A -> B" 或 "A — B"
+  const ARROW_RE = /^(.+?)\s*(?:→|->|—|-->)\s*(.+?)$/;
+  
+  let currentFrom = '';
+  let currentTo = '';
+  let descLines: string[] = [];
+  
+  const flush = () => {
+    if (currentFrom && currentTo) {
+      results.push({ from: currentFrom, to: currentTo, description: descLines.join('\n').trim() });
+    }
+    descLines = [];
+  };
+  
+  for (const line of allLines) {
+    const match = line.match(ARROW_RE);
+    if (match) {
+      flush();
+      currentFrom = match[1].trim();
+      currentTo = match[2].trim();
+      // 如果箭头行后面还有冒号描述，提取出来
+      const colonIdx = currentTo.indexOf('：');
+      const colonIdx2 = currentTo.indexOf(':');
+      const ci = colonIdx >= 0 ? (colonIdx2 >= 0 ? Math.min(colonIdx, colonIdx2) : colonIdx) : colonIdx2;
+      if (ci > 0) {
+        descLines.push(currentTo.slice(ci + 1).trim());
+        currentTo = currentTo.slice(0, ci).trim();
+      }
+    } else {
+      // 非箭头行 → 归入当前关系描述
+      descLines.push(line);
+    }
   }
-  return results;
+  flush();
+  
+  // 过滤不合理的结果
+  return results.filter(r => r.from.length <= 30 && r.to.length <= 30);
 }
 
 /** 从角色文本中解析独立角色列表（用于 novel_characters 同步） */
 function parseCharactersFromText(
   text: string,
   defaultRole: string
-): Array<{ name: string; role: string; description: string; personality: string; appearance: string }> {
+): Array<{ name: string; role: string; gender: string | null; description: string; personality: string; appearance: string }> {
   if (!text || typeof text !== 'string') return [];
   // 逗号/顿号分隔的纯名字列表（严格判断：每项必须是 2-5 字的正名）
   const commaNames = text.split(/[，,、;；]+/).map(s => s.trim()).filter(s => s.length >= 2);
@@ -186,10 +211,10 @@ function parseCharactersFromText(
   const looksLikeNameList = commaNames.length >= 2 && commaNames.length <= 12
     && commaNames.every(s => PROPER_NAME_RE.test(s));
   if (looksLikeNameList) {
-    return commaNames.map(name => ({ name, role: defaultRole, description: '', personality: '', appearance: '' }));
+    return commaNames.map(name => ({ name, role: defaultRole, gender: null, description: '', personality: '', appearance: '' }));
   }
   // 按「名字——」header 行拆分角色块（避免描述续行被误判为新角色）
-  const results: Array<{ name: string; role: string; description: string; personality: string; appearance: string }> = [];
+  const results: Array<{ name: string; role: string; gender: string | null; description: string; personality: string; appearance: string }> = [];
   const lines = text.split('\n');
   const headerIndexes: number[] = [];
   // header 特征：2-6字短名，不以虚词/代词开头，含「——」分隔符
@@ -228,10 +253,12 @@ function parseCharactersFromText(
     const appearance = appearanceMatch ? appearanceMatch[1].trim() : '';
     // 去掉外貌段，提取描述
     const descBlock = block.replace(/【外貌】[^【]*/g, '').trim();
-    const personalityMatch = descBlock.match(/[【\[](.*?)[】\]]/);
+    // 去掉性别标签（如【男】或【女】）以防止它被误判为性格特点
+    const cleanDescBlock = descBlock.replace(/【(男|女)】/g, '').trim();
+    const personalityMatch = cleanDescBlock.match(/[【\[](.*?)[】\]]/);
     const personality = personalityMatch ? personalityMatch[1] : '';
-    const description = descBlock.replace(/^[^】]*】\s*/, '').replace(/[【\[][^】\]]*[】\]]\s*/g, '').trim();
-    results.push({ name, role: defaultRole, description, personality, appearance });
+    const description = cleanDescBlock.replace(/^[^】]*】\s*/, '').replace(/[【\[][^】\]]*[】\]]\s*/g, '').trim();
+    results.push({ name, role: defaultRole, gender, description, personality, appearance });
   }
   return results;
 }

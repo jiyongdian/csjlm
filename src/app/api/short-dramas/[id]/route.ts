@@ -31,7 +31,22 @@ export async function GET(
     if (result.drama.novelId) {
       const novel = await novelManager.getById(result.drama.novelId);
       if (novel) {
-        const details = await novelDetailManager.getNovelDetails(novel.id);
+        let details = await novelDetailManager.getNovelDetails(novel.id);
+        
+        // 自动同步：如果 relationships 为空但 idea 中有数据，自动解析写入
+        if ((!details.relationships || details.relationships.length === 0) && novel.idea) {
+          try {
+            const { syncNovelDetails } = await import('@/lib/novel-detail-sync');
+            await syncNovelDetails(novel.id, novel.userId, {
+              idea: novel.idea,
+              structure: novel.structure,
+              protagonist: novel.protagonist,
+            });
+            details = await novelDetailManager.getNovelDetails(novel.id);
+          } catch (e) {
+            console.warn('[Short Drama API] Auto-sync relationships failed:', e);
+          }
+        }
         let chapters: any[] = [];
         try {
           chapters = novel.chapters ? (typeof novel.chapters === 'string' ? JSON.parse(novel.chapters) : novel.chapters) : [];
@@ -65,6 +80,7 @@ export async function GET(
           items: details?.items || [],
           plot: details?.plot || null,
           chapterHooks: details?.hooks || [],
+          characterRelationships: details?.relationships || [],
         };
       }
     }

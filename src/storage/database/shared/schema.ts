@@ -125,6 +125,7 @@ export const novelCharacters = sqliteTable("novel_characters", {
 	userId: text("user_id").notNull(),
 	name: text("name").notNull(),              // 角色名
 	role: text("role").default('supporting'),  // protagonist / supporting / antagonist / minor
+	gender: text("gender"),                    // 性别 (男/女/未知)
 	description: text("description"),          // 角色描述
 	personality: text("personality"),           // 性格特征
 	appearance: text("appearance"),             // 外貌描述
@@ -186,6 +187,22 @@ export const novelCharacterRelationships = sqliteTable("novel_character_relation
 }, (table) => [
 	index("novel_character_relationships_novel_id_idx").on(table.novelId),
 	index("novel_character_relationships_user_id_idx").on(table.userId),
+]);
+
+// 角色冲突表
+export const novelCharacterConflicts = sqliteTable("novel_character_conflicts", {
+	id: text("id").primaryKey().notNull(),
+	novelId: text("novel_id").notNull(),
+	userId: text("user_id").notNull(),
+	fromCharacter: text("from_character").notNull(), // 冲突来源角色名
+	toCharacter: text("to_character").notNull(),     // 冲突目标角色名
+	conflictType: text("conflict_type"),               // 冲突类型（理念/利益/情感/宿命等）
+	description: text("description"),                  // 冲突描述
+	sortOrder: integer("sort_order").default(0).notNull(),
+	createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => [
+	index("novel_character_conflicts_novel_id_idx").on(table.novelId),
+	index("novel_character_conflicts_user_id_idx").on(table.userId),
 ]);
 
 export const scripts = sqliteTable("scripts", {
@@ -441,6 +458,7 @@ export const insertNovelCharacterSchema = createInsertSchema(novelCharacters).pi
 	userId: true,
 	name: true,
 	role: true,
+	gender: true,
 	description: true,
 	personality: true,
 	appearance: true,
@@ -449,7 +467,7 @@ export const insertNovelCharacterSchema = createInsertSchema(novelCharacters).pi
 	sortOrder: true,
 });
 export const updateNovelCharacterSchema = createInsertSchema(novelCharacters)
-	.pick({ name: true, role: true, description: true, personality: true, appearance: true, background: true, relationships: true, sortOrder: true })
+	.pick({ name: true, role: true, gender: true, description: true, personality: true, appearance: true, background: true, relationships: true, sortOrder: true })
 	.partial();
 export type NovelCharacter = typeof novelCharacters.$inferSelect;
 export type InsertNovelCharacter = z.infer<typeof insertNovelCharacterSchema>;
@@ -496,6 +514,17 @@ export const updateNovelCharacterRelationshipSchema = createInsertSchema(novelCh
 export type NovelCharacterRelationship = typeof novelCharacterRelationships.$inferSelect;
 export type InsertNovelCharacterRelationship = z.infer<typeof insertNovelCharacterRelationshipSchema>;
 export type UpdateNovelCharacterRelationship = z.infer<typeof updateNovelCharacterRelationshipSchema>;
+
+// 角色冲突 Schema
+export const insertNovelCharacterConflictSchema = createInsertSchema(novelCharacterConflicts).pick({
+	novelId: true, userId: true, fromCharacter: true, toCharacter: true, conflictType: true, description: true, sortOrder: true,
+});
+export const updateNovelCharacterConflictSchema = createInsertSchema(novelCharacterConflicts)
+	.pick({ fromCharacter: true, toCharacter: true, conflictType: true, description: true, sortOrder: true })
+	.partial();
+export type NovelCharacterConflict = typeof novelCharacterConflicts.$inferSelect;
+export type InsertNovelCharacterConflict = z.infer<typeof insertNovelCharacterConflictSchema>;
+export type UpdateNovelCharacterConflict = z.infer<typeof updateNovelCharacterConflictSchema>;
 
 export type Script = typeof scripts.$inferSelect;
 export type InsertScript = z.infer<typeof insertScriptSchema>;

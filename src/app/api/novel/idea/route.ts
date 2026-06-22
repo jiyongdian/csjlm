@@ -215,11 +215,11 @@ ${genderGuide}
     const supportingTrimmed = supportingCharacterName?.trim() || '';
 
     const protagonistNames = protagonistTrimmed
-      ? protagonistTrimmed.split(/[，,、;；]+/).map(s => s.trim()).filter(Boolean)
+      ? protagonistTrimmed.split(/[，,、;；]+/).map((s: string) => s.trim()).filter(Boolean)
       : [];
 
     const supportingNames = supportingTrimmed
-      ? supportingTrimmed.split(/[，,、;；]+/).map(s => s.trim()).filter(Boolean)
+      ? supportingTrimmed.split(/[，,、;；]+/).map((s: string) => s.trim()).filter(Boolean)
       : [];
 
     const charNameRule = protagonistNames.length > 0
@@ -249,10 +249,11 @@ ${genderGuide}
   "characters": "${charCountRule}，写具体的人：他怕什么、放不下什么、关键时刻会怎么选。用行为和细节说话，别用形容词堆砌。${charNameRule}。每个角色用\\n换行分隔，一个角色一行（每个200-250字）。格式：角色名——【性别】【性格关键词】具体描述【外貌】发色：xxx｜发型：xxx｜眼睛：xxx｜上身：xxx｜下身：xxx（外貌必须详细具体，符合人物气质和世界观，结尾不加句号）",
   "supportingCharacters": "${supportingCountRule}，每个都要有自己活着的理由：他们的秘密、执念、和主角说不清的纠缠。别写工具人，写活人。${supportingNameRule}。每个角色用\\n换行分隔，一个角色一行（每个100-150字）。格式：角色名——【性别】【性格关键词】具体描述【外貌】发色：xxx｜发型：xxx｜眼睛：xxx｜上身：xxx｜下身：xxx（外貌必须详细具体，符合人物气质和世界观，结尾不加句号）",
   "characterRelationships": "角色关系体系，主角和每个配角都必须参与。每行一条关系，格式：角色A → 角色B：关系描述。要求：①主角与每个核心角色都要有明确关系 ②配角之间也要有关系链（不是所有人都只围着主角转）③关系要有张力和暗流，别写"甲是乙的朋友"这种废话，写他们之间说不出口的话、还不清的债、斩不断的牵绊 ④关系要推动剧情发展，每个互动都暗流涌动 ⑤至少包含一条隐藏关系/双面关系（480-680字）",
+  "conflictRelationships": "角色冲突体系，每行一条冲突，格式：角色A ⊗ 角色B：冲突类型：冲突描述。冲突类型包括：理念冲突、利益冲突、情感冲突、宿命冲突等。要求：①冲突要推动剧情发展 ②每个核心角色至少参与一次冲突 ③冲突要有层次和深度（480-680字）",
   "setting": "世界观，用具体的场景和细节让人闻到那个世界的空气，不是百科词条式的罗列（150-200字）"
 }
 
-注意：characters、supportingCharacters和characterRelationships字段中每个用\n换行分隔，一个一行。其他字段用句号分隔。只输出JSON，别加其他文字。
+注意：characters、supportingCharacters、characterRelationships和conflictRelationships字段中每个用\n换行分隔，一个一行。其他字段用句号分隔。只输出JSON，别加其他文字。
 
 【人物命名铁律 - characters和supportingCharacters中绝对禁止使用以下AI烂大街名字】
 ❌ 禁止男性名：叶辰、林辰、楚辰、夜宸、江辰、墨渊、墨尘、墨寒、墨枭、墨辞、萧逸、萧珩、萧烬、萧玄、萧辰、顾言琛、顾夜寒、顾云深、顾临川、顾景琛、陆沉渊、陆知衍、陆廷川、陆星辞、陆泽言、沈寂、沈砚、沈聿、沈辞、沈亦臻、凌夜、凌骁、凌宸、凌烬、凌玄、厉霆骁、厉烬言、厉司寒、厉夜珩、厉泽渊、傅斯年、傅景深、傅夜辞、傅云宸、傅聿白、云澈、玄澈、苍珩、冥夜、君夜、陈默

@@ -651,6 +651,11 @@ ${endChapter === structure.chapterHooks.length ? `【结局】这是最后几章
                 }
               }
 
+              // 过滤 AI 模型内部标记（如 entity 引用、XML 标签等）
+              text = text.replace(/<entity[^>]*>[\s\S]*?<\/entity>/gi, '');
+              text = text.replace(/<entity[^>]*>/gi, '');
+              text = text.replace(/<\/entity>/gi, '');
+
               if (!text.trim()) continue;
               chapterRawContent += text;
 

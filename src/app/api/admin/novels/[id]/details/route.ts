@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserFromToken } from '@/lib/auth';
-import { novelDetailManager } from '@/storage/database';
+import { novelDetailManager, novelManager } from '@/storage/database';
+import { syncNovelDetails } from '@/lib/novel-detail-sync';
+import { syncSingleCharacterToDrama } from '@/lib/auto-drama';
 
 /**
  * PUT /api/admin/novels/[id]/details
@@ -17,13 +19,27 @@ export async function PUT(
     if (!payload) return NextResponse.json({ error: '未授权' }, { status: 401 });
     if (payload.role !== 'admin') return NextResponse.json({ error: '需要管理员权限' }, { status: 403 });
 
-    await params;
+    const { id: novelId } = await params;
     const { type, entityId, data } = await request.json();
     if (!type || !entityId || !data) return NextResponse.json({ error: '参数不完整' }, { status: 400 });
 
+    // 获取小说的 userId（用于短剧角色同步）
+    const novel = await novelManager.getById(novelId);
+    if (!novel) return NextResponse.json({ error: '小说不存在' }, { status: 404 });
+
     let updated;
     if (type === 'character') {
+      const oldChar = await novelDetailManager.getCharacterById(entityId);
+      const oldName = oldChar ? oldChar.name : '';
+      
       updated = await novelDetailManager.updateCharacter(entityId, data);
+      
+      // 同步更新到短剧角色表（使用小说所有者的 userId）
+      if (updated) {
+        await syncSingleCharacterToDrama(novelId, novel.userId, oldName, updated);
+      }
+    } else if (type === 'relationship') {
+      updated = await novelDetailManager.updateRelationship(entityId, data);
     } else if (type === 'scene') {
       updated = await novelDetailManager.updateScene(entityId, data);
     } else if (type === 'item') {
@@ -58,11 +74,35 @@ export async function GET(
     }
 
     const { id } = await params;
-    const details = await novelDetailManager.getNovelDetails(id);
+    
+    // 先获取现有详情
+    let existingDetails = await novelDetailManager.getNovelDetails(id);
+    
+    // 如果需要同步角色或关系数据
+    const needSyncChars = !existingDetails.characters || existingDetails.characters.length === 0;
+    const needSyncRels = !existingDetails.relationships || existingDetails.relationships.length === 0;
+    
+    if ((needSyncChars || needSyncRels) && id) {
+      const novel = await novelManager.getById(id);
+      if (novel && novel.idea) {
+        try {
+          console.log(`[Admin Details GET] Auto-syncing for novel ${id}, needChars=${needSyncChars}, needRels=${needSyncRels}`);
+          await syncNovelDetails(id, novel.userId, {
+            idea: novel.idea,
+            structure: novel.structure,
+            protagonist: novel.protagonist,
+          });
+          // 重新获取同步后的数据
+          existingDetails = await novelDetailManager.getNovelDetails(id);
+        } catch (e) {
+          console.warn('[Admin Details GET] Auto-sync failed:', e);
+        }
+      }
+    }
 
     return NextResponse.json({
       success: true,
-      data: details,
+      data: existingDetails,
     });
   } catch (error) {
     console.error('获取小说详情失败:', error);

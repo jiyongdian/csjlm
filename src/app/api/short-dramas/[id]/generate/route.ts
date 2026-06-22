@@ -414,6 +414,8 @@ async function _callImageOnce(
 
   try {
     const isOpenAICompatible = ['openai', 'gpt-image-2', 'codex-gpt-image-2', 'custom-image'].includes(provider);
+    const isGeminiImage = model && (model.includes('gemini') && !model.includes('text'));
+    const isAgnesImage = provider === 'openai' && model && (model.includes('agnes-image') || model.includes('agnes_image'));
     const negativePrompt = params.negativePrompt || '';
     let imageUrl = '';
 
@@ -506,6 +508,72 @@ async function _callImageOnce(
       case 'siliconflow':
       case 'cogview':
       case 'chatfire': {
+        // custom-image: when model contains 'gemini', route to Gemini API
+        if (provider === 'custom-image' && isGeminiImage) {
+          let rawBase = (apiUrl || '').replace(/\/$/, '');
+          // Strip common API prefixes so we only get the domain base
+          rawBase = rawBase.replace(/\/v1(?:beta)?$/, '');
+          const geminiBase = `${rawBase}/v1beta`;
+          const geminiUrl = `${geminiBase}/models/${model}:generateContent`;
+          const gParts: any[] = [{ text: prompt }];
+          for (const ref of refImages) {
+            const commaIdx = ref.indexOf(',');
+            const mhead = commaIdx > 0 ? ref.substring(0, commaIdx) : '';
+            const b64data = commaIdx > 0 ? ref.substring(commaIdx + 1) : ref;
+            const mime = mhead.replace('data:', '').replace(';base64', '') || 'image/jpeg';
+            gParts.push({ inlineData: { mimeType: mime, data: b64data } });
+          }
+          const sizeToAspect: Record<string, string> = {
+            '1280x720': '16:9', '1920x1080': '16:9',
+            '720x1280': '9:16', '1080x1920': '9:16',
+            '1024x1024': '1:1', '512x512': '1:1',
+            '1024x768': '4:3', '768x1024': '3:4',
+          };
+          const gAspect = params.aspectRatio || sizeToAspect[sizeStr] || '16:9';
+          const gBody: any = {
+            contents: [{ role: 'user', parts: gParts }],
+            generationConfig: {
+              responseModalities: ['IMAGE', 'TEXT'],
+              temperature: 1.0, topP: 0.95, maxOutputTokens: 8192,
+              imageConfig: { aspectRatio: gAspect },
+            },
+          };
+          const gr = await tFetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify(gBody),
+            signal: ctrl.signal,
+          });
+          if (!gr.ok) { const et = await gr.text(); throw new Error(`Gemini custom: ${gr.status} ${et}`); }
+          const gd = await gr.json();
+          // Debug: log full response structure for Gemini image
+          if (process.env.NODE_ENV !== 'production') {
+            console.log('[Image][gemini-custom] response keys:', Object.keys(gd));
+            console.log('[Image][gemini-custom] candidate parts:', JSON.stringify(gd?.candidates?.[0]?.content?.parts?.slice(0, 2)));
+          }
+          const part = gd?.candidates?.[0]?.content?.parts?.[0];
+          if (part?.inlineData?.data) {
+            imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+          } else {
+            // Gemini returned text only (description), not an image
+            const textDesc = part?.text || 'No parts found';
+            console.warn('[Image][gemini-custom] No inlineData, got text description instead');
+            // Try to find inlineData among multiple parts
+            const allParts = gd?.candidates?.[0]?.content?.parts || [];
+            let foundInline = false;
+            for (const p of allParts) {
+              if (p?.inlineData?.data) {
+                imageUrl = `data:${p.inlineData.mimeType || 'image/png'};base64,${p.inlineData.data}`;
+                foundInline = true;
+                break;
+              }
+            }
+            if (!foundInline) {
+              throw new Error(`Gemini returned text description instead of image. Response: ${typeof textDesc === 'string' ? textDesc.substring(0, 200) : JSON.stringify(textDesc).substring(0, 200)}`);
+            }
+          }
+          break;
+        }
         const base = apiUrl ||
           (isOpenAICompatible ? 'https://api.openai.com/v1'
           : provider === 'siliconflow' ? 'https://api.siliconflow.cn/v1'
@@ -523,6 +591,42 @@ async function _callImageOnce(
             const d = await r.json();
             if (d.error) throw new Error(d.error.message || d.error || 'SiliconFlow 生成失败');
             imageUrl = d.data?.[0]?.url || d.images?.[0]?.url || '';
+          } else if (isAgnesImage) {
+            // Agnes Image 2.1/2.0：参考图必须是 URL，需要上传到公网
+            const urlRefs: string[] = [];
+            for (const ref of refImages) {
+              if (ref.startsWith('http')) {
+                urlRefs.push(ref);
+              } else if (ref.startsWith('/')) {
+                const publicUrl = await uploadLocalImage(ref);
+                if (publicUrl) urlRefs.push(publicUrl);
+              }
+            }
+            const body: any = { model, prompt, size: sizeStr, n: 1 };
+            if (urlRefs.length > 0) {
+              body.extra_body = { image: urlRefs.slice(0, 4) };
+            }
+            const genPath = customEndpoint || '/images/generations';
+            const r = await tFetch(`${base}${genPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify(body) });
+            const d = await r.json();
+            if (d.error) throw new Error(d.error.message || d.error || 'Agnes Image 生成失败');
+            imageUrl = d.data?.[0]?.url || d.images?.[0]?.url || '';
+          } else if (isOpenAICompatible) {
+            // OpenAI / custom-image 等：走 /images/edits（FormData），需要 base64
+            const fd = new FormData();
+            fd.append('model', model); fd.append('prompt', prompt); fd.append('n', '1'); fd.append('size', sizeStr);
+            if (isOpenAICompatible) fd.append('quality', params.quality || 'standard');
+            for (let ri = 0; ri < refImages.length; ri++) {
+              const [mhead, b64] = refImages[ri].split(',');
+              const mime = mhead.replace('data:', '').replace(';base64', '') || 'image/jpeg';
+              const ext = mime.split('/')[1] || 'jpg';
+              fd.append('image[]', new Blob([Buffer.from(b64, 'base64')], { type: mime }), `ref${ri}.${ext}`);
+            }
+            const editsPath = customEndpoint || '/images/edits';
+            const r = await tFetch(`${base}${editsPath}`, { method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}` }, body: fd });
+            const d = await r.json();
+            if (d.error) throw new Error(d.error.message || d.error || '生成失败');
+            imageUrl = d.data?.[0]?.url || d.data?.[0]?.b64_json || d.images?.[0]?.url || '';
           } else {
             const fd = new FormData();
             fd.append('model', model); fd.append('prompt', prompt); fd.append('n', '1'); fd.append('size', sizeStr);
@@ -543,7 +647,6 @@ async function _callImageOnce(
           const body: any = { model, prompt, n: 1, size: sizeStr };
           if (isOpenAICompatible) body.quality = params.quality || 'standard';
           if (provider === 'siliconflow') { body.image_size = sizeStr; delete body.size; }
-          // 将超时参数透传给代理服务（支持 image_poll_timeout_secs 的代理会使用此值）
           if (params?.image_poll_timeout_secs) body.image_poll_timeout_secs = Number(params.image_poll_timeout_secs);
           const genPath = customEndpoint || '/images/generations';
           const r = await tFetch(`${base}${genPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify(body) });
@@ -629,7 +732,18 @@ async function _callImageOnce(
         if (!r.ok) {
           const t = await r.text().catch(() => r.statusText);
           let msg = t;
-          try { const j = JSON.parse(t); msg = j.error?.message || j.message || t; } catch {}
+          try {
+            const j = JSON.parse(t);
+            // 提取完整的错误信息，避免只显示 "openai_error" 这种无意义的消息
+            const err = j.error || {};
+            const detailParts = [
+              err.message || j.message || '',
+              err.type ? `[类型] ${err.type}` : '',
+              err.code ? `[代码] ${err.code}` : '',
+              err.request_id ? `[请求ID] ${err.request_id}` : '',
+            ].filter(Boolean);
+            msg = detailParts.length > 0 ? detailParts.join('; ') : t;
+          } catch {}
           throw new Error(msg || '图片生成失败');
         }
         const d = await r.json();
@@ -1490,6 +1604,8 @@ async function handleGenerateVideo(
         provider = 'veo';
       } else if (urlLower.includes('dashscope.aliyuncs.com')) {
         provider = 'qwen-video';
+      } else if (urlLower.includes('apihub.agnes-ai.com') || urlLower.includes('agnes-ai.com')) {
+        provider = 'agnes-video';
       }
     }
 
@@ -1957,6 +2073,62 @@ async function handleGenerateVideo(
           const d = await safeFetchJson(`https://dashscope.aliyuncs.com/api/v1/tasks/${externalTaskId}`, { headers: { 'Authorization': `Bearer ${apiKey}` } });
           if (d.output?.task_status === 'SUCCEEDED') return { done: true, videoUrl: d.output?.video_url || '' };
           if (d.output?.task_status === 'FAILED') return { done: true, error: '通义万象生成失败' };
+          return { done: false };
+        });
+        if (pollResult.error) return { error: pollResult.error };
+        videoUrl = pollResult.videoUrl || '';
+        break;
+      }
+
+      // ── Agnes Video V2.0 ──
+      case 'agnes-video': {
+        // 规范化 base URL：去除末尾可能的 /v1 前缀，统一拼接到 /v1/videos
+        const rawBase = (apiUrl || 'https://apihub.agnes-ai.com').replace(/\/+$/, '');
+        const base = rawBase.endsWith('/v1') ? rawBase.slice(0, -3) : rawBase;
+        console.log(`[AgnesVideo] config: apiUrl="${apiUrl}", rawBase="${rawBase}", base="${base}", model="${model}"`);
+        const fr = params.frameRate || 24;
+        // 用户选择的是秒数（duration），需转换成 Agnes 的 num_frames（必须是 8n+1）
+        const targetFrames = params.numFrames || Math.round(duration * fr);
+        let numFrames = Math.max(81, targetFrames);
+        numFrames = 8 * Math.round((numFrames - 1) / 8) + 1; // 对齐到 8n+1
+        const body: any = {
+          model: model || 'agnes-video-v2.0',
+          prompt: promptText,
+          height: videoHeight || 768,
+          width: videoWidth || 1152,
+          num_frames: numFrames,
+          frame_rate: fr,
+        };
+        if (firstFrameUrl) {
+          body.image = firstFrameUrl;
+        }
+        // 单张参考图也作为首帧生成视频（无需 keyframes 模式）
+        if (charRefUrls.length > 0 && !firstFrameUrl) {
+          body.image = charRefUrls[0];
+        }
+        const submitData = await safeFetchJson(`${base}/v1/videos`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify(body),
+        });
+        externalTaskId = submitData.task_id || submitData.id || '';
+        console.log(`[AgnesVideo] submit base="${base}", task_id="${externalTaskId}", submitUrl="${base}/v1/videos"`);
+        if (!externalTaskId) {
+          // 尝试同步返回
+          videoUrl = submitData.remixed_from_video_id || submitData.url || submitData.video_url || '';
+          break;
+        }
+        const pollResult = await pollUntilDone(5000, 36, async () => {
+          const pollUrl = `${base}/v1/videos/${externalTaskId}`;
+          console.log(`[AgnesVideo] poll attempt, url="${pollUrl}"`);
+          const d = await safeFetchJson(pollUrl, {
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+          });
+          if (d.status === 'completed') {
+            const vUrl = d.remixed_from_video_id || d.video_url || d.url || '';
+            return { done: true, videoUrl: vUrl };
+          }
+          if (d.status === 'failed') return { done: true, error: d.error?.message || 'Agnes Video 生成失败' };
           return { done: false };
         });
         if (pollResult.error) return { error: pollResult.error };

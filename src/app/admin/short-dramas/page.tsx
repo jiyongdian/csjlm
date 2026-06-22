@@ -396,6 +396,22 @@ export default function AdminShortDramasPage() {
     if (!detailEditEntity || !detailModal.drama) return;
     setDetailEditSaving(true);
     try {
+      // 如果是角色编辑，将独立外貌子字段组合为 appearance 字符串
+      let saveForm: any = { ...detailEditForm };
+      if (detailEditEntity.type === 'character') {
+        const parts: string[] = [];
+        if (saveForm.appearanceHairColor) parts.push(`发色：${saveForm.appearanceHairColor}`);
+        if (saveForm.appearanceHairstyle) parts.push(`发型：${saveForm.appearanceHairstyle}`);
+        if (saveForm.appearanceEyes) parts.push(`眼睛：${saveForm.appearanceEyes}`);
+        if (saveForm.appearanceUpper) parts.push(`上身：${saveForm.appearanceUpper}`);
+        if (saveForm.appearanceLower) parts.push(`下身：${saveForm.appearanceLower}`);
+        saveForm.appearance = parts.join('｜');
+        delete saveForm.appearanceHairColor;
+        delete saveForm.appearanceHairstyle;
+        delete saveForm.appearanceEyes;
+        delete saveForm.appearanceUpper;
+        delete saveForm.appearanceLower;
+      }
       const token = getToken();
       const { type, data } = detailEditEntity;
       const urlMap = { character: 'characters', scene: 'scenes', item: 'items' } as const;
@@ -403,7 +419,7 @@ export default function AdminShortDramasPage() {
       const res = await fetch(`/api/short-dramas/${detailModal.drama.id}/${urlMap[type]}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ [keyMap[type]]: data.id, ...detailEditForm }),
+        body: JSON.stringify({ [keyMap[type]]: data.id, ...saveForm }),
       });
       const result = await res.json();
       if (result.success) {
@@ -659,13 +675,23 @@ export default function AdminShortDramasPage() {
               <button onClick={() => setDetailEditEntity(null)} className="text-gray-400 hover:text-white text-lg leading-none">✕</button>
             </div>
             {detailEditEntity.type === 'character' && (<>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1"><label className="text-xs text-gray-400">角色名 *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.name || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, name: e.target.value }))} /></div>
+                <div className="space-y-1"><label className="text-xs text-gray-400">性别</label><select className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-[#1a1040] text-white focus:outline-none focus:border-violet-500" value={detailEditForm.gender || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, gender: e.target.value }))}><option value="">未知</option><option value="男">男</option><option value="女">女</option></select></div>
                 <div className="space-y-1"><label className="text-xs text-gray-400">角色类型</label><select className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-[#1a1040] text-white focus:outline-none" value={detailEditForm.role || 'supporting'} onChange={e => setDetailEditForm((f: any) => ({ ...f, role: e.target.value }))}><option value="protagonist">主角</option><option value="antagonist">反派</option><option value="supporting">配角</option></select></div>
               </div>
               <div className="space-y-1"><label className="text-xs text-gray-400">角色描述</label><textarea rows={4} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-violet-500" placeholder="介绍角色背景、身份、故事..." value={detailEditForm.description || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, description: e.target.value }))} /></div>
               <div className="space-y-1"><label className="text-xs text-gray-400">性格特点</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.personality || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, personality: e.target.value }))} /></div>
-              <div className="space-y-1"><label className="text-xs text-gray-400">外貌描述</label><textarea rows={2} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-violet-500" value={detailEditForm.appearance || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearance: e.target.value }))} /></div>
+              <div className="space-y-1">
+                <label className="text-xs text-gray-400">外貌特征</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-[10px] text-amber-300">发色</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-amber-500" value={detailEditForm.appearanceHairColor || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceHairColor: e.target.value }))} /></div>
+                  <div><label className="text-[10px] text-yellow-300">发型</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-yellow-500" value={detailEditForm.appearanceHairstyle || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceHairstyle: e.target.value }))} /></div>
+                  <div><label className="text-[10px] text-sky-300">眼睛</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-sky-500" value={detailEditForm.appearanceEyes || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceEyes: e.target.value }))} /></div>
+                  <div><label className="text-[10px] text-violet-300">上身</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.appearanceUpper || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceUpper: e.target.value }))} /></div>
+                  <div className="col-span-2"><label className="text-[10px] text-emerald-300">下身</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={detailEditForm.appearanceLower || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceLower: e.target.value }))} /></div>
+                </div>
+              </div>
             </>)}
             {detailEditEntity.type === 'scene' && (<>
               <div className="space-y-1"><label className="text-xs text-gray-400">场景名称 *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={detailEditForm.name || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, name: e.target.value }))} /></div>
@@ -925,8 +951,21 @@ export default function AdminShortDramasPage() {
                   {detailLoading ? (
                     <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full" /></div>
                   ) : detailData?.characters && detailData.characters.length > 0 ? (() => {
-                    const renderCharCard = (c: any) => (
-                      <div key={c.id} onClick={() => { setDetailEditEntity({ type: 'character', data: c }); setDetailEditForm({ name: c.name || '', role: c.role || 'supporting', description: c.description || '', personality: c.personality || '', appearance: c.appearance || '' }); }} className="flex items-start gap-3 bg-white/5 border border-white/10 rounded-xl p-4 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer transition-all group">
+                    const parseAppearanceField = (appearance: string, label: string): string => {
+                      const regex = new RegExp(`${label}[：:]\\s*([^｜|]*)`);
+                      const match = appearance.match(regex);
+                      return match ? match[1].trim() : '';
+                    };
+                    const renderCharCard = (c: any) => {
+                      // 如果 gender 为空但 personality 包含性别信息，自动提取
+                      let gender = c.gender || '';
+                      let personality = c.personality || '';
+                      if (!gender && (personality === '男' || personality === '女')) {
+                        gender = personality;
+                        personality = '';
+                      }
+                      return (
+                      <div key={c.id} onClick={() => { setDetailEditEntity({ type: 'character', data: c }); setDetailEditForm({ name: c.name || '', role: c.role || 'supporting', gender, description: c.description || '', personality, appearance: c.appearance || '', appearanceHairColor: parseAppearanceField(c.appearance || '', '发色'), appearanceHairstyle: parseAppearanceField(c.appearance || '', '发型'), appearanceEyes: parseAppearanceField(c.appearance || '', '眼睛'), appearanceUpper: parseAppearanceField(c.appearance || '', '上身'), appearanceLower: parseAppearanceField(c.appearance || '', '下身') }); }} className="flex items-start gap-3 bg-white/5 border border-white/10 rounded-xl p-4 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer transition-all group">
                         <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-400 to-pink-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 overflow-hidden">
                           {c.imageUrl ? <img src={c.imageUrl} alt="" className="w-full h-full object-cover" /> : cleanCharName(c.name)?.[0] || '?'}
                         </div>
@@ -949,6 +988,7 @@ export default function AdminShortDramasPage() {
                         </div>
                       </div>
                     );
+                    };
                     const protagonists = detailData.characters.filter((c: any) => c.role === 'protagonist');
                     const antagonists = detailData.characters.filter((c: any) => c.role === 'antagonist');
                     const supporting = detailData.characters.filter((c: any) => c.role !== 'protagonist' && c.role !== 'antagonist');

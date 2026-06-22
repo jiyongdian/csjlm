@@ -107,7 +107,7 @@ export default function Home() {
             href="/novel-generator"
           >
             <span className="text-2xl group-hover:scale-110 transition-transform duration-300">🚀</span>
-            <span>开始创作小说</span>
+            <span>开始智能创作</span>
           </a>
 
           {/* 登录入口 */}

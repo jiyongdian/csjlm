@@ -64,9 +64,11 @@ function parseCharactersFromText(text: string, defaultRole: string = 'protagonis
     const appearance = appearanceMatch ? appearanceMatch[1].trim() : '';
     // Remove appearance section, then extract description + personality
     const descBlock = block.replace(/【外貌】[^【]*/g, '').trim();
-    const personalityMatch = descBlock.match(/[【\[](.*?)[】\]]/);
+    // 去掉性别标签（如【男】或【女】）以防止它被误判为性格特点
+    const cleanDescBlock = descBlock.replace(/【(男|女)】/g, '').trim();
+    const personalityMatch = cleanDescBlock.match(/[【\[](.*?)[】\]]/);
     const personality = personalityMatch ? personalityMatch[1] : '';
-    const description = descBlock.replace(/^[^】]*】\s*/, '').replace(/[【\[][^】\]]*[】\]]\s*/g, '').trim();
+    const description = cleanDescBlock.replace(/^[^】]*】\s*/, '').replace(/[【\[][^】\]]*[】\]]\s*/g, '').trim();
     characters.push({ name, role: defaultRole, gender, description, personality, appearance });
   }
   return characters;
@@ -299,6 +301,7 @@ async function syncCharactersToDrama(dramaId: string, userId: string, novelId: s
             dramaId, userId,
             name: c.name,
             role: c.role || 'supporting',
+            gender: c.gender || null,
             description: c.description,
             personality: c.personality,
             appearance: c.appearance,
@@ -338,6 +341,55 @@ async function syncCharactersToDrama(dramaId: string, userId: string, novelId: s
     if (created > 0) console.log(`[AutoDrama] 从idea文本同步${created}个角色到短剧 ${dramaId}`);
   } catch (e: any) {
     console.warn(`[AutoDrama] 角色同步失败:`, e.message);
+  }
+}
+
+/**
+ * 当小说角色被单独更新时，同步该角色信息到该小说关联的所有短剧角色中
+ */
+export async function syncSingleCharacterToDrama(
+  novelId: string,
+  userId: string,
+  oldName: string,
+  updatedChar: any
+): Promise<void> {
+  try {
+    const dramas = await shortDramaManager.getDramasByNovelId(novelId);
+    if (dramas.length === 0) return;
+    
+    console.log(`[AutoDrama] 小说角色 "${oldName}" 更新，开始同步到关联的 ${dramas.length} 个短剧`);
+    for (const drama of dramas) {
+      const existChars = await dramaWorkflowManager.getCharactersByDramaId(drama.id);
+      const matched = existChars.find((c: any) => c.name === oldName);
+      
+      if (matched) {
+        await dramaWorkflowManager.updateCharacter(matched.id, {
+          name: updatedChar.name,
+          role: updatedChar.role || 'supporting',
+          gender: updatedChar.gender || null,
+          description: updatedChar.description || null,
+          personality: updatedChar.personality || null,
+          appearance: updatedChar.appearance || null,
+        });
+        console.log(`[AutoDrama] 更新短剧 ${drama.id} 角色 "${oldName}" -> "${updatedChar.name}"`);
+      } else {
+        // 如果短剧中不存在该角色，则新增
+        await dramaWorkflowManager.createCharacter({
+          dramaId: drama.id,
+          userId,
+          name: updatedChar.name,
+          role: updatedChar.role || 'supporting',
+          gender: updatedChar.gender || null,
+          description: updatedChar.description || null,
+          personality: updatedChar.personality || null,
+          appearance: updatedChar.appearance || null,
+          sortOrder: existChars.length,
+        });
+        console.log(`[AutoDrama] 在短剧 ${drama.id} 中新增同步角色 "${updatedChar.name}"`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[AutoDrama] 单个角色同步到短剧失败:`, e.message);
   }
 }
 

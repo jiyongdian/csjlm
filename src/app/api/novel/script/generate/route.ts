@@ -491,6 +491,11 @@ function buildChapterContext(chapterInfo: any, structure: any, idea: any, novel:
   if (idea?.coreConcept) context.push(`核心概念：${idea.coreConcept}`);
   if (idea?.theme) context.push(`主题：${idea.theme}`);
 
+  // 添加角色关系体系
+  if (idea?.characterRelationships && idea.characterRelationships.trim()) {
+    context.push(`\n角色关系体系：\n${idea.characterRelationships}`);
+  }
+
   if (structure?.mainPlot) context.push(`主线剧情：${structure.mainPlot}`);
   if (structure?.emotionalArc) context.push(`情感弧线：${structure.emotionalArc}`);
 

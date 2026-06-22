@@ -127,6 +127,7 @@ if (!globalForSqlite.dbInitialized) {
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     role TEXT DEFAULT 'supporting',
+    gender TEXT,
     description TEXT,
     personality TEXT,
     appearance TEXT,
@@ -740,6 +741,17 @@ function migrateShortDramaColumns() {
           sqlite.prepare(`ALTER TABLE drama_characters ADD COLUMN ${col} ${type}`).run();
           console.log(`[Migrate] Added drama_characters.${col} column`);
         }
+      }
+    }
+
+    // novel_characters 表
+    const novelCharTables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='novel_characters'").all() as any[];
+    if (novelCharTables.length > 0) {
+      const cols = sqlite.prepare("PRAGMA table_info(novel_characters)").all() as any[];
+      const colNames = new Set(cols.map((c: any) => c.name));
+      if (!colNames.has('gender')) {
+        sqlite.prepare("ALTER TABLE novel_characters ADD COLUMN gender TEXT").run();
+        console.log("[Migrate] Added novel_characters.gender column");
       }
     }
 

@@ -23,6 +23,7 @@ interface NovelData {
   totalChapters: number; currentChapters: number; status: string;
   structure: any; chapters: NovelChapter[];
   characters: NovelCharacter[]; scenes: NovelScene[]; items: any[]; plot: any; chapterHooks: any[];
+  characterRelationships?: { id: string; fromCharacter: string; toCharacter: string; relationship: string | null }[];
 }
 interface ScriptChapter { index: number; title: string; hasScreenplay: boolean; screenplay: string | null; scenes: any[]; imagePrompts: any[]; videoPrompts: any[]; }
 interface ScriptData {
@@ -127,6 +128,7 @@ export default function ShortDramaWorkspace() {
   const pendingMediaJobsRef = useRef(0);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const typingSoundIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const selectedEpisodeRef = useRef<Episode | null>(null);
   const [isAdmin] = useState<boolean>(() => { try { return JSON.parse(typeof window !== 'undefined' ? (localStorage.getItem('user') || 'null') : 'null')?.role === 'admin'; } catch { return false; } });
   const [availableConfigs, setAvailableConfigs] = useState<any[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
@@ -308,6 +310,7 @@ export default function ShortDramaWorkspace() {
         setDrama(data.data);
         if (data.data.episodes?.length > 0 && !selectedEpisode) {
           setSelectedEpisode(data.data.episodes[0]);
+          selectedEpisodeRef.current = data.data.episodes[0];
         }
         // 后台自动本地化外部图片链接
         const toLocalize: any[] = [
@@ -340,7 +343,7 @@ export default function ShortDramaWorkspace() {
       }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [dramaId, getToken, router, selectedEpisode]);
+  }, [dramaId, getToken, router]);
 
   useEffect(() => { fetchDrama(); }, [fetchDrama]);
 
@@ -422,11 +425,12 @@ export default function ShortDramaWorkspace() {
     const cleanup = onDataChange((e) => {
       if ((e.type === 'short-drama') && e.id === dramaId) {
         fetchDrama();
-        if (selectedEpisode) fetchShots(selectedEpisode.id);
+        const ep = selectedEpisodeRef.current;
+        if (ep) fetchShots(ep.id);
       }
     });
     return cleanup;
-  }, [dramaId, fetchDrama, fetchShots, selectedEpisode]);
+  }, [dramaId, fetchDrama]);
 
   const callGenerate = async (action: string, extra: Record<string, any> = {}) => {
     const PER_ITEM_ACTIONS = ['generate-image','generate-video','generate-asset-image','generate-tts'];
@@ -876,24 +880,30 @@ export default function ShortDramaWorkspace() {
             )}
           </button>
         </div>
-        {/* Tab 导航 */}
-        <div className="max-w-[1600px] mx-auto px-6 flex gap-1 overflow-x-auto pb-0">
-          {tabs.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium rounded-t-lg whitespace-nowrap transition-all border-b-2 ${
-                tab === t.key
-                  ? 'bg-white/10 text-white border-violet-500'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border-transparent'
-              }`}
-            >
-              <span>{t.icon}</span><span>{t.label}</span>
-              {t.badge !== undefined && t.badge > 0 && <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-white/10 rounded-full">{t.badge}</span>}
-            </button>
-          ))}
-        </div>
       </div>
 
-      <div className="max-w-[1600px] mx-auto px-6 py-6">
+      {/* 左侧栏 + 右侧内容 */}
+      <div className="relative z-10">
+        <div className="max-w-[1600px] mx-auto flex">
+          {/* 左侧 Tab 导航栏 */}
+          <nav className="w-44 shrink-0 py-6 px-3 border-r border-white/5" style={{ background: 'rgba(15,12,41,0.3)' }}>
+            <div className="space-y-1">
+              {tabs.map(t => (
+                <button key={t.key} onClick={() => setTab(t.key)}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs font-medium rounded-lg whitespace-nowrap transition-all ${
+                    tab === t.key
+                      ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30 shadow-sm shadow-violet-500/10'
+                      : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-transparent'
+                  }`}
+                >
+                  <span className="text-base">{t.icon}</span><span>{t.label}</span>
+                  {t.badge !== undefined && t.badge > 0 && <span className="ml-auto px-1.5 py-0.5 text-[10px] bg-white/10 rounded-full">{t.badge}</span>}
+                </button>
+              ))}
+            </div>
+          </nav>
+          {/* 右侧内容区 */}
+          <div className="flex-1 min-w-0 py-6 px-6">
         {/* ===== 总览 ===== */}
         {tab === 'overview' && (
           <div className="space-y-6">
@@ -1289,6 +1299,8 @@ export default function ShortDramaWorkspace() {
         </div>
       )}
     </div>
+  </div>
+</div>
   );
 }
 
@@ -1495,24 +1507,26 @@ function SourceTab({ drama, dramaId, getToken, onRefresh }: any) {
           })()}
 
           {/* 角色关系体系 */}
-          {novel.characters.some((c: NovelCharacter) => c.relationships) && (
+          {(novel.characterRelationships && novel.characterRelationships.length > 0) && (
             <div className="px-6 py-4 border-b border-white/5">
               <div className="text-xs text-pink-300 mb-3 font-semibold flex items-center gap-2">
-                <span className="w-5 h-5 rounded-lg bg-pink-500/20 flex items-center justify-center text-[11px]">🕸️</span>
-                角色关系体系
+                <span className="w-5 h-5 rounded-lg bg-pink-500/20 flex items-center justify-center text-[11px]">🔗</span>
+                角色关系体系 <span className="text-pink-500/60">({novel.characterRelationships.length})</span>
               </div>
               <div className="space-y-2">
-                {novel.characters
-                  .filter((c: NovelCharacter) => c.relationships)
-                  .map((c: NovelCharacter) => (
-                    <div key={c.id} className="flex gap-2.5 p-3 rounded-xl bg-pink-500/6 border border-pink-500/15">
-                      <div className="w-7 h-7 rounded-lg bg-pink-500/20 text-pink-300 text-xs font-bold flex items-center justify-center flex-shrink-0">{cleanCharName(c.name).charAt(0)}</div>
-                      <div>
-                        <div className="text-xs font-bold text-white mb-0.5">{cleanCharName(c.name)}</div>
-                        <p className="text-[10px] text-gray-400 leading-relaxed">{c.relationships}</p>
+                {novel.characterRelationships.map((r: any) => (
+                  <div key={r.id} className="flex gap-2.5 p-3 rounded-xl bg-pink-500/6 border border-pink-500/15">
+                    <div className="w-7 h-7 rounded-lg bg-pink-500/20 text-pink-300 text-xs font-bold flex items-center justify-center flex-shrink-0">🔗</div>
+                    <div>
+                      <div className="text-xs font-bold text-white">
+                        <span className="text-amber-400">{r.fromCharacter}</span>
+                        <span className="text-gray-500 mx-1">→</span>
+                        <span className="text-violet-400">{r.toCharacter}</span>
                       </div>
+                      {r.relationship && <p className="text-[10px] text-gray-400 leading-relaxed mt-0.5">{r.relationship}</p>}
                     </div>
-                  ))}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -2074,25 +2088,6 @@ function AssetImgPanel({ mediaConfig, onSaveMediaConfig, systemMediaConfigs = []
           {showCfgForm ? '▲ 收起配置' : '▼ 展开配置'}
         </button>
       )}
-      {/* 尺寸选择 */}
-      <div className="flex items-center gap-3 mt-3 pt-3 border-t border-white/10">
-        <span className="text-xs text-gray-400 font-medium whitespace-nowrap">生成尺寸</span>
-        <div className="flex gap-2">
-          {IMAGE_ASPECTS.map(a => (
-            <button key={a.key} onClick={() => setImageAspect(a.key)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-xl border transition-all ${
-                imageAspect === a.key
-                  ? 'border-sky-500/70 bg-sky-500/20 text-sky-200 shadow-sm shadow-sky-500/20'
-                  : 'border-white/12 bg-white/5 text-gray-300 hover:bg-white/10 hover:border-white/25 hover:text-white'
-              }`}>
-              {a.label}
-            </button>
-          ))}
-          <span className="text-xs text-gray-500 bg-white/5 px-2.5 py-1 rounded-lg border border-white/8 self-center">
-            {IMAGE_ASPECTS.find(a => a.key === imageAspect)?.w} × {IMAGE_ASPECTS.find(a => a.key === imageAspect)?.h}
-          </span>
-        </div>
-      </div>
     </div>
   );
 }
@@ -2179,9 +2174,9 @@ function StyleSettingModal({ type, style, onSave, onClose }: { type: StyleType; 
 // ======================== 角色管理 ========================
 function CharactersTab({ drama, dramaId, getToken, onRefresh, generating, generatingSet = new Set(), onGenerate, mediaConfig, onSaveMediaConfig, systemMediaConfigs, onContextMenuCard }: any) {
   const [addChar, setAddChar] = useState(false);
-  const [charForm, setCharForm] = useState({ name: "", role: "supporting", gender: "", description: "", personality: "", appearance: "" });
+  const [charForm, setCharForm] = useState({ name: "", role: "supporting", gender: "", description: "", personality: "", appearance: "", appearanceHairColor: "", appearanceHairstyle: "", appearanceEyes: "", appearanceUpper: "", appearanceLower: "" });
   const [editChar, setEditChar] = useState<Character | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", role: "supporting", gender: "", description: "", personality: "", appearance: "" });
+  const [editForm, setEditForm] = useState({ name: "", role: "supporting", gender: "", description: "", personality: "", appearance: "", appearanceHairColor: "", appearanceHairstyle: "", appearanceEyes: "", appearanceUpper: "", appearanceLower: "" });
   const [saving, setSaving] = useState(false);
   const [imageAspect, setImageAspectRaw] = useState<string>(() =>
     (typeof window !== 'undefined' && localStorage.getItem('sdc-aspect-character')) || '1:1'
@@ -2199,19 +2194,53 @@ function CharactersTab({ drama, dramaId, getToken, onRefresh, generating, genera
     onRefresh();
   };
 
+  const parseAppearanceField = (appearance: string, label: string): string => {
+    const regex = new RegExp(`${label}[：:]\\s*([^｜|]*)`);
+    const match = appearance.match(regex);
+    return match ? match[1].trim() : '';
+  };
+
   const openEdit = (c: Character) => {
     setEditChar(c);
-    setEditForm({ name: cleanCharName(c.name), role: c.role || 'supporting', gender: c.gender || '', description: c.description || '', personality: (c as any).personality || '', appearance: c.appearance || '' });
+    // 如果 gender 为空但 personality 包含性别信息，自动提取
+    let gender = c.gender || '';
+    let personality = (c as any).personality || '';
+    if (!gender && (personality === '男' || personality === '女')) {
+      gender = personality;
+      personality = '';
+    }
+    setEditForm({ 
+      name: cleanCharName(c.name), 
+      role: c.role || 'supporting', 
+      gender, 
+      description: c.description || '', 
+      personality,
+      appearance: c.appearance || '',
+      appearanceHairColor: parseAppearanceField(c.appearance || '', '发色'),
+      appearanceHairstyle: parseAppearanceField(c.appearance || '', '发型'),
+      appearanceEyes: parseAppearanceField(c.appearance || '', '眼睛'),
+      appearanceUpper: parseAppearanceField(c.appearance || '', '上身'),
+      appearanceLower: parseAppearanceField(c.appearance || '', '下身'),
+    });
   };
 
   const handleUpdate = async () => {
     if (!editChar || !editForm.name) return;
     setSaving(true);
     try {
+      // 组合外貌子字段为完整字符串
+      const appearanceParts: string[] = [];
+      if (editForm.appearanceHairColor) appearanceParts.push(`发色：${editForm.appearanceHairColor}`);
+      if (editForm.appearanceHairstyle) appearanceParts.push(`发型：${editForm.appearanceHairstyle}`);
+      if (editForm.appearanceEyes) appearanceParts.push(`眼睛：${editForm.appearanceEyes}`);
+      if (editForm.appearanceUpper) appearanceParts.push(`上身：${editForm.appearanceUpper}`);
+      if (editForm.appearanceLower) appearanceParts.push(`下身：${editForm.appearanceLower}`);
+      const appearance = appearanceParts.join('｜');
+
       const res = await fetch(`/api/short-dramas/${dramaId}/characters`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({ characterId: editChar.id, ...editForm }),
+        body: JSON.stringify({ characterId: editChar.id, name: editForm.name, role: editForm.role, gender: editForm.gender, description: editForm.description, personality: editForm.personality, appearance }),
       });
       const data = await res.json();
       if (data.success) {
@@ -2224,13 +2253,22 @@ function CharactersTab({ drama, dramaId, getToken, onRefresh, generating, genera
 
   const handleAdd = async () => {
     if (!charForm.name) return;
+    // 组合外貌子字段为完整字符串
+    const appearanceParts: string[] = [];
+    if (charForm.appearanceHairColor) appearanceParts.push(`发色：${charForm.appearanceHairColor}`);
+    if (charForm.appearanceHairstyle) appearanceParts.push(`发型：${charForm.appearanceHairstyle}`);
+    if (charForm.appearanceEyes) appearanceParts.push(`眼睛：${charForm.appearanceEyes}`);
+    if (charForm.appearanceUpper) appearanceParts.push(`上身：${charForm.appearanceUpper}`);
+    if (charForm.appearanceLower) appearanceParts.push(`下身：${charForm.appearanceLower}`);
+    const appearance = appearanceParts.join('｜');
+
     await fetch(`/api/short-dramas/${dramaId}/characters`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
-      body: JSON.stringify(charForm),
+      body: JSON.stringify({ name: charForm.name, role: charForm.role, gender: charForm.gender, description: charForm.description, personality: charForm.personality, appearance }),
     });
     setAddChar(false);
-    setCharForm({ name: "", role: "supporting", gender: "", description: "", personality: "", appearance: "" });
+    setCharForm({ name: "", role: "supporting", gender: "", description: "", personality: "", appearance: "", appearanceHairColor: "", appearanceHairstyle: "", appearanceEyes: "", appearanceUpper: "", appearanceLower: "" });
     onRefresh();
   };
 
@@ -2285,8 +2323,29 @@ function CharactersTab({ drama, dramaId, getToken, onRefresh, generating, genera
               <input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" placeholder="如：冷静、偏执、藏得深" value={editForm.personality} onChange={e => setEditForm(f => ({ ...f, personality: e.target.value }))} />
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-gray-400">外貌描述（用于AI绘图）</label>
-              <textarea rows={2} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-violet-500" placeholder="外貌特征，用于生成角色图片" value={editForm.appearance} onChange={e => setEditForm(f => ({ ...f, appearance: e.target.value }))} />
+              <label className="text-xs text-gray-400">外貌特征</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-amber-300">发色</label>
+                  <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-amber-500" value={editForm.appearanceHairColor} onChange={e => setEditForm(f => ({ ...f, appearanceHairColor: e.target.value }))} placeholder="例如: 黑色" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-yellow-300">发型</label>
+                  <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-yellow-500" value={editForm.appearanceHairstyle} onChange={e => setEditForm(f => ({ ...f, appearanceHairstyle: e.target.value }))} placeholder="例如: 短发" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-sky-300">眼睛</label>
+                  <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-sky-500" value={editForm.appearanceEyes} onChange={e => setEditForm(f => ({ ...f, appearanceEyes: e.target.value }))} placeholder="例如: 蓝色" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-violet-300">上身</label>
+                  <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={editForm.appearanceUpper} onChange={e => setEditForm(f => ({ ...f, appearanceUpper: e.target.value }))} placeholder="例如: 白色衬衫" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] text-emerald-300">下身</label>
+                  <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={editForm.appearanceLower} onChange={e => setEditForm(f => ({ ...f, appearanceLower: e.target.value }))} placeholder="例如: 黑色长裤" />
+                </div>
+              </div>
             </div>
             <div className="flex gap-2 justify-end pt-2 border-t border-white/10">
               <button onClick={() => setEditChar(null)} className="px-4 py-2 text-xs text-gray-400 hover:text-white border border-white/10 rounded-lg transition-colors">取消</button>
@@ -2304,7 +2363,21 @@ function CharactersTab({ drama, dramaId, getToken, onRefresh, generating, genera
 
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">👤 角色列表</h3>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <div className="relative">
+            <select
+              value={imageAspect}
+              onChange={e => setImageAspect(e.target.value)}
+              className="appearance-none pl-3 pr-8 py-2 text-xs font-bold rounded-lg border-2 border-sky-500 bg-gradient-to-r from-sky-600/25 to-blue-600/25 text-sky-200 cursor-pointer hover:border-sky-400 hover:from-sky-600/35 hover:to-blue-600/35 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-all shadow-[0_0_12px_rgba(14,165,233,0.35)]"
+            >
+              {IMAGE_ASPECTS.map(a => (
+                <option key={a.key} value={a.key} className="bg-[#0d1b2a] text-white font-normal">
+                  {a.key}（{a.w}×{a.h}）
+                </option>
+              ))}
+            </select>
+            <svg className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-sky-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+          </div>
           {drama.novelId && (
             <button onClick={async () => {
               try {
@@ -2374,7 +2447,31 @@ function CharactersTab({ drama, dramaId, getToken, onRefresh, generating, genera
             </select>
           </div>
           <textarea placeholder="角色描述" rows={2} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none" value={charForm.description} onChange={e => setCharForm(f => ({ ...f, description: e.target.value }))} />
-          <textarea placeholder="外貌描述（用于AI绘图）" rows={2} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none" value={charForm.appearance} onChange={e => setCharForm(f => ({ ...f, appearance: e.target.value }))} />
+          <div className="space-y-1">
+            <label className="text-xs text-gray-400">外貌特征</label>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-amber-300">发色</label>
+                <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-amber-500" value={charForm.appearanceHairColor} onChange={e => setCharForm(f => ({ ...f, appearanceHairColor: e.target.value }))} placeholder="例如: 黑色" />
+              </div>
+              <div>
+                <label className="text-[10px] text-yellow-300">发型</label>
+                <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-yellow-500" value={charForm.appearanceHairstyle} onChange={e => setCharForm(f => ({ ...f, appearanceHairstyle: e.target.value }))} placeholder="例如: 短发" />
+              </div>
+              <div>
+                <label className="text-[10px] text-sky-300">眼睛</label>
+                <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-sky-500" value={charForm.appearanceEyes} onChange={e => setCharForm(f => ({ ...f, appearanceEyes: e.target.value }))} placeholder="例如: 蓝色" />
+              </div>
+              <div>
+                <label className="text-[10px] text-violet-300">上身</label>
+                <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={charForm.appearanceUpper} onChange={e => setCharForm(f => ({ ...f, appearanceUpper: e.target.value }))} placeholder="例如: 白色衬衫" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[10px] text-emerald-300">下身</label>
+                <input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={charForm.appearanceLower} onChange={e => setCharForm(f => ({ ...f, appearanceLower: e.target.value }))} placeholder="例如: 黑色长裤" />
+              </div>
+            </div>
+          </div>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setAddChar(false)} className="px-3 py-1.5 text-xs text-gray-400 hover:text-white">取消</button>
             <button onClick={handleAdd} className="px-4 py-1.5 text-xs bg-violet-600 text-white rounded-lg">保存</button>
@@ -2592,7 +2689,21 @@ function ScenesTab({ drama, dramaId, getToken, onRefresh, generating, generating
 
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">🏔️ 场景列表</h3>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <div className="relative">
+            <select
+              value={imageAspect}
+              onChange={e => setImageAspect(e.target.value)}
+              className="appearance-none pl-3 pr-8 py-2 text-xs font-bold rounded-lg border-2 border-sky-500 bg-gradient-to-r from-sky-600/25 to-blue-600/25 text-sky-200 cursor-pointer hover:border-sky-400 hover:from-sky-600/35 hover:to-blue-600/35 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-all shadow-[0_0_12px_rgba(14,165,233,0.35)]"
+            >
+              {IMAGE_ASPECTS.map(a => (
+                <option key={a.key} value={a.key} className="bg-[#0d1b2a] text-white font-normal">
+                  {a.key}（{a.w}×{a.h}）
+                </option>
+              ))}
+            </select>
+            <svg className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-sky-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+          </div>
           {drama.novelId && (
             <button onClick={handleSyncFromNovel} disabled={syncing}
               className="px-4 py-2 text-xs font-medium bg-teal-600/80 text-white rounded-lg hover:bg-teal-600 disabled:opacity-50 flex items-center gap-1 transition-all">
@@ -2830,7 +2941,21 @@ function ItemsTab({ drama, dramaId, getToken, onRefresh, generating, generatingS
 
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">🔑 物品列表</h3>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <div className="relative">
+            <select
+              value={imageAspect}
+              onChange={e => setImageAspect(e.target.value)}
+              className="appearance-none pl-3 pr-8 py-2 text-xs font-bold rounded-lg border-2 border-sky-500 bg-gradient-to-r from-sky-600/25 to-blue-600/25 text-sky-200 cursor-pointer hover:border-sky-400 hover:from-sky-600/35 hover:to-blue-600/35 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-all shadow-[0_0_12px_rgba(14,165,233,0.35)]"
+            >
+              {IMAGE_ASPECTS.map(a => (
+                <option key={a.key} value={a.key} className="bg-[#0d1b2a] text-white font-normal">
+                  {a.key}（{a.w}×{a.h}）
+                </option>
+              ))}
+            </select>
+            <svg className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-sky-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+          </div>
           {drama.novelId && (
             <button onClick={handleSyncFromNovel} disabled={syncing}
               className="px-4 py-2 text-xs font-medium bg-orange-600/80 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 flex items-center gap-1 transition-all">

@@ -52,6 +52,7 @@ interface NovelCharacter {
   id: string;
   name: string;
   role: string | null;
+  gender: string | null;
   description: string | null;
   personality: string | null;
   appearance: string | null;
@@ -84,6 +85,7 @@ interface NovelDetails {
   scenes: NovelScene[];
   items: NovelItem[];
   relationships: NovelCharacterRelationship[];
+  conflicts?: any[];
 }
 
 export default function AdminNovelsPage() {
@@ -103,11 +105,14 @@ export default function AdminNovelsPage() {
   const [novelDetails, setNovelDetails] = useState<NovelDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailTab, setDetailTab] = useState<'info' | 'plot' | 'hooks' | 'characters' | 'relationships' | 'scenes' | 'items' | 'chapters'>('info');
+  const [relationshipSubTab, setRelationshipSubTab] = useState<'relationships' | 'conflicts'>('relationships');
+  const [novelIdea, setNovelIdea] = useState<any>(null);
 
-  const [detailEditEntity, setDetailEditEntity] = useState<{ type: 'character' | 'scene' | 'item'; data: any } | null>(null);
+  const [detailEditEntity, setDetailEditEntity] = useState<{ type: 'character' | 'scene' | 'item' | 'relationship'; data: any } | null>(null);
   const [detailEditForm, setDetailEditForm] = useState<any>({});
   const [detailEditSaving, setDetailEditSaving] = useState(false);
   const [resyncingChars, setResyncingChars] = useState(false);
+  const [resyncingAll, setResyncingAll] = useState(false);
 
   const getToken = useCallback(() => getAuthToken(), []);
   const [error, setError] = useState<string | null>(null);
@@ -282,15 +287,28 @@ export default function AdminNovelsPage() {
     setNovelDetails(null);
     setNovelChapters([]);
     setEditingChapterIdx(null);
+    setNovelIdea(null);
     setDetailsLoading(true);
     try {
       const token = getToken();
-      const res = await fetch(`/api/admin/novels/${novel.id}/details`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.success) {
-        setNovelDetails(data.data);
+      // 同时获取小说详情和小说完整数据（包含 idea）
+      const [detailsRes, novelRes] = await Promise.all([
+        fetch(`/api/admin/novels/${novel.id}/details`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`/api/admin/novels/${novel.id}`, { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      const detailsData = await detailsRes.json();
+      const novelData = await novelRes.json();
+      if (detailsData.success) {
+        setNovelDetails(detailsData.data);
+      }
+      if (novelData.success && novelData.data?.idea) {
+        let ideaObj: any;
+        if (typeof novelData.data.idea === 'string') {
+          try { ideaObj = JSON.parse(novelData.data.idea); } catch { ideaObj = null; }
+        } else {
+          ideaObj = novelData.data.idea;
+        }
+        setNovelIdea(ideaObj);
       }
     } catch (e) {
       console.error('获取小说详情失败:', e);
@@ -303,16 +321,46 @@ export default function AdminNovelsPage() {
     if (!detailEditEntity || !detailModal.novel) return;
     setDetailEditSaving(true);
     try {
+      // 如果是角色编辑，将独立外貌子字段组合为 appearance 字符串
+      let saveForm = { ...detailEditForm };
+      if (detailEditEntity.type === 'character') {
+        const parts: string[] = [];
+        if (saveForm.appearanceHairColor) parts.push(`发色：${saveForm.appearanceHairColor}`);
+        if (saveForm.appearanceHairstyle) parts.push(`发型：${saveForm.appearanceHairstyle}`);
+        if (saveForm.appearanceEyes) parts.push(`眼睛：${saveForm.appearanceEyes}`);
+        if (saveForm.appearanceUpper) parts.push(`上身：${saveForm.appearanceUpper}`);
+        if (saveForm.appearanceLower) parts.push(`下身：${saveForm.appearanceLower}`);
+        saveForm.appearance = parts.join('｜');
+        delete saveForm.appearanceHairColor;
+        delete saveForm.appearanceHairstyle;
+        delete saveForm.appearanceEyes;
+        delete saveForm.appearanceUpper;
+        delete saveForm.appearanceLower;
+      }
       const token = getToken();
       const res = await fetch(`/api/admin/novels/${detailModal.novel.id}/details`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ type: detailEditEntity.type, entityId: detailEditEntity.data.id, data: detailEditForm }),
+        body: JSON.stringify({ type: detailEditEntity.type, entityId: detailEditEntity.data.id, data: saveForm }),
       });
       const result = await res.json();
       if (result.success) {
         broadcastDataChange({ type: 'novel', action: 'update', id: detailModal.novel.id });
         await refreshNovelDetails(detailModal.novel.id);
+        // 重新获取小说完整数据以更新 idea
+        const novelRes = await fetch(`/api/admin/novels/${detailModal.novel.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const novelData = await novelRes.json();
+        if (novelData.success && novelData.data?.idea) {
+          let ideaObj: any;
+          if (typeof novelData.data.idea === 'string') {
+            try { ideaObj = JSON.parse(novelData.data.idea); } catch { ideaObj = null; }
+          } else {
+            ideaObj = novelData.data.idea;
+          }
+          setNovelIdea(ideaObj);
+        }
         setDetailEditEntity(null);
       }
     } finally { setDetailEditSaving(false); }
@@ -674,23 +722,40 @@ export default function AdminNovelsPage() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={e => e.target === e.currentTarget && setDetailEditEntity(null)}>
           <div className="bg-[#1a1040] border border-white/15 rounded-2xl p-6 w-full max-w-[480px] max-h-[80vh] overflow-y-auto space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-white font-bold">✏️ 编辑{detailEditEntity.type === 'character' ? '角色' : detailEditEntity.type === 'scene' ? '场景' : '物品'}</h3>
+              <h3 className="text-white font-bold">✏️ 编辑{detailEditEntity.type === 'character' ? '角色' : detailEditEntity.type === 'scene' ? '场景' : detailEditEntity.type === 'relationship' ? '角色关系' : '物品'}</h3>
               <button onClick={() => setDetailEditEntity(null)} className="text-gray-400 hover:text-white text-lg leading-none">✕</button>
             </div>
             {detailEditEntity.type === 'character' && (<>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1"><label className="text-xs text-gray-400">角色名 *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.name || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, name: e.target.value }))} /></div>
+                <div className="space-y-1"><label className="text-xs text-gray-400">性别</label><select className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-[#1a1040] text-white focus:outline-none focus:border-violet-500" value={detailEditForm.gender || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, gender: e.target.value }))}><option value="">未知</option><option value="男">男</option><option value="女">女</option></select></div>
                 <div className="space-y-1"><label className="text-xs text-gray-400">角色类型</label><select className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-[#1a1040] text-white focus:outline-none" value={detailEditForm.role || 'supporting'} onChange={e => setDetailEditForm((f: any) => ({ ...f, role: e.target.value }))}><option value="protagonist">主角</option><option value="antagonist">反派</option><option value="supporting">配角</option></select></div>
               </div>
               <div className="space-y-1"><label className="text-xs text-gray-400">角色描述</label><textarea rows={4} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-violet-500" placeholder="介绍角色背景、身份、故事..." value={detailEditForm.description || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, description: e.target.value }))} /></div>
               <div className="space-y-1"><label className="text-xs text-gray-400">性格特点</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.personality || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, personality: e.target.value }))} /></div>
-              <div className="space-y-1"><label className="text-xs text-gray-400">外貌描述</label><textarea rows={2} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-violet-500" value={detailEditForm.appearance || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearance: e.target.value }))} /></div>
+              <div className="space-y-1">
+                <label className="text-xs text-gray-400">外貌特征</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-[10px] text-amber-300">发色</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-amber-500" value={detailEditForm.appearanceHairColor || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceHairColor: e.target.value }))} /></div>
+                  <div><label className="text-[10px] text-yellow-300">发型</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-yellow-500" value={detailEditForm.appearanceHairstyle || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceHairstyle: e.target.value }))} /></div>
+                  <div><label className="text-[10px] text-sky-300">眼睛</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-sky-500" value={detailEditForm.appearanceEyes || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceEyes: e.target.value }))} /></div>
+                  <div><label className="text-[10px] text-violet-300">上身</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.appearanceUpper || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceUpper: e.target.value }))} /></div>
+                  <div className="col-span-2"><label className="text-[10px] text-emerald-300">下身</label><input type="text" className="w-full px-2 py-1.5 text-xs border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={detailEditForm.appearanceLower || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, appearanceLower: e.target.value }))} /></div>
+                </div>
+              </div>
               <div className="space-y-1"><label className="text-xs text-gray-400">背景故事</label><textarea rows={2} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-violet-500" value={detailEditForm.background || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, background: e.target.value }))} /></div>
             </>)}
             {detailEditEntity.type === 'scene' && (<>
               <div className="space-y-1"><label className="text-xs text-gray-400">场景名称 *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={detailEditForm.name || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, name: e.target.value }))} /></div>
               <div className="space-y-1"><label className="text-xs text-gray-400">场景描述</label><textarea rows={4} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-emerald-500" value={detailEditForm.description || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, description: e.target.value }))} /></div>
               <div className="space-y-1"><label className="text-xs text-gray-400">氛围/基调</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-emerald-500" value={detailEditForm.atmosphere || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, atmosphere: e.target.value }))} /></div>
+            </>)}
+            {detailEditEntity.type === 'relationship' && (<>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1"><label className="text-xs text-gray-400">角色A *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-amber-500" value={detailEditForm.fromCharacter || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, fromCharacter: e.target.value }))} /></div>
+                <div className="space-y-1"><label className="text-xs text-gray-400">角色B *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-violet-500" value={detailEditForm.toCharacter || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, toCharacter: e.target.value }))} /></div>
+              </div>
+              <div className="space-y-1"><label className="text-xs text-gray-400">关系描述</label><textarea rows={4} className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white resize-none focus:outline-none focus:border-pink-500" placeholder="描述两个角色之间的关系..." value={detailEditForm.relationship || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, relationship: e.target.value }))} /></div>
             </>)}
             {detailEditEntity.type === 'item' && (<>
               <div className="space-y-1"><label className="text-xs text-gray-400">物品名称 *</label><input type="text" className="w-full px-3 py-2 text-sm border border-white/15 rounded-lg bg-white/5 text-white focus:outline-none focus:border-amber-500" value={detailEditForm.name || ''} onChange={e => setDetailEditForm((f: any) => ({ ...f, name: e.target.value }))} /></div>
@@ -872,7 +937,32 @@ export default function AdminNovelsPage() {
               {/* 角色 Tab */}
               {detailTab === 'characters' && (
                 <div className="space-y-3">
-                  <div className="flex justify-end">
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={async () => {
+                        if (!detailModal.novel || resyncingAll) return;
+                        setResyncingAll(true);
+                        try {
+                          const token = getToken();
+                          const res = await fetch(`/api/admin/novels/${detailModal.novel.id}/resync-details`, {
+                            method: 'POST', headers: { Authorization: `Bearer ${token}` },
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            await refreshNovelDetails(detailModal.novel.id);
+                            alert(`${data.message}：角色 ${data.counts.characters} 个，关系 ${data.counts.relationships} 条，场景 ${data.counts.scenes} 个，物品 ${data.counts.items} 个`);
+                          } else {
+                            alert('同步失败：' + (data.message || '未知错误'));
+                          }
+                        } catch { alert('请求失败'); }
+                        finally { setResyncingAll(false); }
+                      }}
+                      disabled={resyncingAll}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600/20 text-blue-300 border border-blue-500/30 rounded-lg hover:bg-blue-600/30 disabled:opacity-50 transition-all"
+                    >
+                      {resyncingAll ? <span className="animate-spin w-3 h-3 border border-blue-300 border-t-transparent rounded-full" /> : '🔄'}
+                      重新同步所有详情
+                    </button>
                     <button
                       onClick={async () => {
                         if (!detailModal.novel || resyncingChars) return;
@@ -902,8 +992,14 @@ export default function AdminNovelsPage() {
                   {detailsLoading ? (
                     <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full" /></div>
                   ) : novelDetails?.characters && novelDetails.characters.length > 0 ? (
-                    novelDetails.characters.map(c => (
-                      <div key={c.id} onClick={() => { setDetailEditEntity({ type: 'character', data: c }); setDetailEditForm({ name: c.name || '', role: c.role || 'supporting', description: c.description || '', personality: c.personality || '', appearance: c.appearance || '', background: (c as any).background || '' }); }} className="bg-white/5 border border-white/10 rounded-xl p-4 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer transition-all group">
+                    novelDetails.characters.map(c => {
+                      const parseAppearanceField = (label: string): string => {
+                        const regex = new RegExp(`${label}[：:]\\s*([^｜|]*)`);
+                        const match = (c.appearance || '').match(regex);
+                        return match ? match[1].trim() : '';
+                      };
+                      return (
+                      <div key={c.id} onClick={() => { setDetailEditEntity({ type: 'character', data: c }); setDetailEditForm({ name: c.name || '', role: c.role || 'supporting', gender: c.gender || '', description: c.description || '', personality: c.personality || '', appearance: c.appearance || '', appearanceHairColor: parseAppearanceField('发色'), appearanceHairstyle: parseAppearanceField('发型'), appearanceEyes: parseAppearanceField('眼睛'), appearanceUpper: parseAppearanceField('上身'), appearanceLower: parseAppearanceField('下身'), background: (c as any).background || '' }); }} className="bg-white/5 border border-white/10 rounded-xl p-4 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer transition-all group">
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-sm font-bold text-white">{cleanCharName(c.name)}</span>
                           <span className={`text-[10px] px-2 py-0.5 rounded-full ${
@@ -918,8 +1014,9 @@ export default function AdminNovelsPage() {
                           {c.relationships && <div className="text-xs col-span-2"><span className="text-gray-500">关系：</span><span className="text-gray-300">{c.relationships}</span></div>}
                         </div>
                       </div>
-                    ))
-                  ) : (
+                    );
+                  })
+                ) : (
                     <div className="text-center py-8 text-gray-500 text-sm">暂无角色数据</div>
                   )}
                 </div>
@@ -927,22 +1024,96 @@ export default function AdminNovelsPage() {
 
               {/* 角色关系 Tab */}
               {detailTab === 'relationships' && (
-                <div className="space-y-2">
-                  {detailsLoading ? (
-                    <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full" /></div>
-                  ) : novelDetails?.relationships && novelDetails.relationships.length > 0 ? (
-                    novelDetails.relationships.map((r, i) => (
-                      <div key={r.id || i} className="bg-white/5 border border-white/10 rounded-xl p-4">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className="text-sm font-bold text-amber-400">{r.fromCharacter}</span>
-                          <span className="text-gray-500 text-sm">→</span>
-                          <span className="text-sm font-bold text-violet-400">{r.toCharacter}</span>
-                        </div>
-                        {r.relationship && <p className="text-xs text-gray-400 leading-relaxed">{r.relationship}</p>}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-center py-8 text-gray-500 text-sm">暂无角色关系数据</div>
+                <div className="space-y-4">
+                  {/* 子 Tab 切换 */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRelationshipSubTab('relationships')}
+                      className={`px-4 py-2 text-xs font-medium rounded-lg transition-all ${
+                        relationshipSubTab === 'relationships'
+                          ? 'bg-purple-600/30 text-purple-300 border border-purple-500/40'
+                          : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+                      }`}
+                    >
+                      🤝 角色关系体系
+                      {novelDetails && novelDetails.relationships && novelDetails.relationships.length > 0 && (
+                        <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-white/10 rounded-full">{novelDetails.relationships.length}</span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setRelationshipSubTab('conflicts')}
+                      className={`px-4 py-2 text-xs font-medium rounded-lg transition-all ${
+                        relationshipSubTab === 'conflicts'
+                          ? 'bg-red-600/30 text-red-300 border border-red-500/40'
+                          : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+                      }`}
+                    >
+                      ⚔️ 冲突角色关系
+                      {novelDetails && novelDetails.conflicts && novelDetails.conflicts.length > 0 && (
+                        <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-white/10 rounded-full">{novelDetails.conflicts.length}</span>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* 角色关系列表 */}
+                  {relationshipSubTab === 'relationships' && (
+                    <div className="space-y-2">
+                      {detailsLoading ? (
+                        <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full" /></div>
+                      ) : novelDetails && novelDetails.relationships && novelDetails.relationships.length > 0 ? (
+                        novelDetails.relationships.map((r: any, i: number) => (
+                          <div
+                            key={r.id || i}
+                            onClick={() => {
+                              setDetailEditEntity({ type: 'relationship', data: r });
+                              setDetailEditForm({
+                                fromCharacter: r.fromCharacter || '',
+                                toCharacter: r.toCharacter || '',
+                                relationship: r.relationship || '',
+                              });
+                            }}
+                            className="bg-white/5 border border-white/10 rounded-xl p-4 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer transition-all"
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-amber-400">{r.fromCharacter}</span>
+                                <span className="text-gray-500 text-sm">→</span>
+                                <span className="text-sm font-bold text-violet-400">{r.toCharacter}</span>
+                              </div>
+                              <span className="text-[10px] text-gray-500">点击编辑</span>
+                            </div>
+                            {r.relationship && <p className="text-xs text-gray-400 leading-relaxed">{r.relationship}</p>}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-center py-8 text-gray-500 text-sm">暂无角色关系数据</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 角色冲突列表 */}
+                  {relationshipSubTab === 'conflicts' && (
+                    <div className="space-y-2">
+                      {detailsLoading ? (
+                        <div className="flex justify-center py-8"><div className="animate-spin w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full" /></div>
+                      ) : novelDetails && novelDetails.conflicts && novelDetails.conflicts.length > 0 ? (
+                        novelDetails.conflicts.map((c, i) => (
+                          <div key={c.id || i} className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <span className="text-sm font-bold text-red-400">{c.fromCharacter}</span>
+                              <span className="text-red-600 text-sm font-bold">⚔</span>
+                              <span className="text-sm font-bold text-orange-400">{c.toCharacter}</span>
+                              {c.conflictType && (
+                                <span className="ml-2 px-2 py-0.5 text-[10px] bg-red-500/20 text-red-300 rounded-full">{c.conflictType}</span>
+                              )}
+                            </div>
+                            {c.description && <p className="text-xs text-gray-400 leading-relaxed">{c.description}</p>}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-center py-8 text-gray-500 text-sm">暂无冲突角色关系数据</div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1035,6 +1206,15 @@ export default function AdminNovelsPage() {
 
             {/* 底部操作 */}
             <div className="sticky bottom-0 border-t border-white/10 rounded-b-2xl px-6 py-4 flex justify-end gap-3" style={{ background: 'rgba(15,12,41,0.98)' }}>
+              <button
+                onClick={() => {
+                  // 触发同步：刷新详情数据
+                  refreshNovelDetails(detailModal.novel!.id);
+                }}
+                className="px-5 py-2.5 text-sm font-medium bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl hover:from-emerald-700 hover:to-teal-700 shadow-sm shadow-emerald-500/20 transition-all"
+              >
+                刷新详情
+              </button>
               <button
                 onClick={() => setDetailModal({ visible: false, novel: null })}
                 className="px-5 py-2.5 text-sm font-medium text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-all"

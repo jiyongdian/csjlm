@@ -939,12 +939,25 @@ export default function AssetDetailPanel(props: Props) {
     if (!asset) return;
     try {
       setSaving(true);
+      // 如果是角色类型，将外貌子字段组合为 appearance 字符串
+      let saveProperties = { ...properties };
+      if (asset.type === 'character') {
+        const subKeys = ['appearanceHairColor', 'appearanceHairstyle', 'appearanceEyes', 'appearanceUpper', 'appearanceLower'];
+        const labels = ['发色', '发型', '眼睛', '上身', '下身'];
+        const parts: string[] = [];
+        subKeys.forEach((key, i) => {
+          const val = saveProperties[key];
+          if (val) parts.push(`${labels[i]}：${val}`);
+        });
+        saveProperties.appearance = parts.join('｜');
+        subKeys.forEach(key => delete saveProperties[key]);
+      }
       await assetApi.update({
         id: asset.id,
         name,
         description: description || undefined,
         coverUrl: coverUrl || undefined,
-        properties: JSON.stringify(properties),
+        properties: JSON.stringify(saveProperties),
       });
       setDirty(false);
       onSaved();
@@ -1254,7 +1267,52 @@ export default function AssetDetailPanel(props: Props) {
               </div>
             ) : (
               <div className="rounded-xl border border-border/30 bg-card/40 p-4 grid grid-cols-2 gap-3">
-                {fields.map((fd) => (
+                {fields.map((fd) => {
+                  // 角色类型的外貌字段拆分为5个子字段
+                  if (fd.key === "appearance" && asset?.type === "character") {
+                    const parseAppearanceField = (label: string): string => {
+                      const val = properties[fd.key] || '';
+                      const regex = new RegExp(`${label}[：:]\\s*([^｜|]*)`);
+                      const match = val.match(regex);
+                      return match ? match[1].trim() : '';
+                    };
+                    const hairColor = parseAppearanceField('发色');
+                    const hairstyle = parseAppearanceField('发型');
+                    const eyes = parseAppearanceField('眼睛');
+                    const upper = parseAppearanceField('上身');
+                    const lower = parseAppearanceField('下身');
+                    return (
+                      <div key={fd.key} className="col-span-2 space-y-1">
+                        <label className="text-xs text-muted-foreground font-medium flex items-center gap-0.5">
+                          {fd.label}
+                          {fd.required && <span className="text-orange-400 text-[10px]">*</span>}
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] text-amber-300 font-medium">发色</label>
+                            <Input value={properties['appearance_appearanceHairColor'] || hairColor || ''} onChange={(e) => handlePropertyChange('appearance_appearanceHairColor', e.target.value)} placeholder="例如: 黑色" className="h-8 text-xs" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-yellow-300 font-medium">发型</label>
+                            <Input value={properties['appearance_appearanceHairstyle'] || hairstyle || ''} onChange={(e) => handlePropertyChange('appearance_appearanceHairstyle', e.target.value)} placeholder="例如: 短发" className="h-8 text-xs" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sky-300 font-medium">眼睛</label>
+                            <Input value={properties['appearance_appearanceEyes'] || eyes || ''} onChange={(e) => handlePropertyChange('appearance_appearanceEyes', e.target.value)} placeholder="例如: 蓝色" className="h-8 text-xs" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-violet-300 font-medium">上身</label>
+                            <Input value={properties['appearance_appearanceUpper'] || upper || ''} onChange={(e) => handlePropertyChange('appearance_appearanceUpper', e.target.value)} placeholder="例如: 白色衬衫" className="h-8 text-xs" />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="text-[10px] text-emerald-300 font-medium">下身</label>
+                            <Input value={properties['appearance_appearanceLower'] || lower || ''} onChange={(e) => handlePropertyChange('appearance_appearanceLower', e.target.value)} placeholder="例如: 黑色长裤" className="h-8 text-xs" />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
                   <div
                     key={fd.key}
                     className={cn(
@@ -1301,7 +1359,8 @@ export default function AssetDetailPanel(props: Props) {
                       />
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

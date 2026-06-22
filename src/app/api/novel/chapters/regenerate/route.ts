@@ -376,6 +376,11 @@ ${nextChapterHook ? `【下一章衔接】
                 }
               }
 
+              // 过滤 AI 模型内部标记（如 entity 引用）
+              text = text.replace(/<entity[^>]*>[\s\S]*?<\/entity>/gi, '');
+              text = text.replace(/<entity[^>]*>/gi, '');
+              text = text.replace(/<\/entity>/gi, '');
+
               if (!text.trim()) continue;
 
               fullText += text;
